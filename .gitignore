@@ -1,0 +1,4 @@
+*.o
+jdiff
+jpath
+tests/*
