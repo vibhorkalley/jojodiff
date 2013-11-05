@@ -1,0 +1,2081 @@
+|*******************************************************************************
+* Jojo's Diff : diff on binary files
+*
+* Copyright (C) 2002 Joris Heirbaut (joheirba@tijd.com)
+*
+* Author                Version Date       Modification
+* --------------------- ------- -------    -----------------------
+* Joris Heirbaut        v0.0    10-06-2002 hashed compare
+* Joris Heirbaut                14-06-2002 full compare
+* Joris Heirbaut                17-06-2002 global positions
+* Joris Heirbaut        v0.1    18-06-2002 first well-working runs!!!
+* Joris Heirbaut                19-06-2002 compare in buffer before read position
+* Joris Heirbaut        v0.1    20-06-2002 optimized esc-sequences & lengths
+* Joris Heirbaut        v0.2    24-06-2002 running okay again
+* Joris Heirbaut        v0.2b   01-07-2002 bugfix on length=252
+* Joris Heirbaut        v0.2c   09-07-2002 bugfix on divide by zero in statistics
+* Joris Heirbaut        v0.3a   09-07-2002 hashtable hint only on samplerate
+* Joris Heirbaut          |     09-07-2002 exit code 1 if files are equal
+* Joris Heirbaut          |     12-07-2002 bugfix using ufFabPos in function call
+* Joris Heirbaut        v0.3a   16-07-2002 backtrack on original file
+* Joris Heirbaut        v0.4a   19-07-2002 prescan sourcefile
+* Joris Heirbaut          |     30-08-2002 bugfix in ufFabRst and ufFabPos
+* Joris Heirbaut          |     03-08-2002 bugfix for backtrack before start-of-file
+* Joris Heirbaut          |     09-09-2002 reimplemented filebuffer
+* Joris Heirbaut        v0.4a   10-09-2002 take best of multiple possibilities
+* Joris Heirbaut        v0.4b   11-09-2002 soft-reading from files
+* Joris Heirbaut          |     18-09-2002 moved ufFabCmp from ufFndAhdChk to ufFndAhdAdd/Bst
+* Joris Heirbaut          |     18-09-2002 ufFabOpt - optimize a found solution
+* Joris Heirbaut          |     10-10-2002 added Fab->ilPosEof to correctly handle EOF condition
+* Joris Heirbaut        v0.4b   16-10-2002 replaces ufFabCmpBck and ufFabCmpFwd with ufFabFnd
+* Joris Heirbaut        v0.4c   04-11-2002 use ufHshFnd after prescanning
+* Joris Heirbaut          |     04-11-2002 no reset of matching table
+* Joris Heirbaut          |     21-12-2002 rewrite of matching table logic
+* Joris Heirbaut          |     24-12-2002 no compare in ufFndAhdAdd
+* Joris Heirbaut          |     02-01-2003 restart finding matches at regular intervals when no matches are found
+* Joris Heirbaut          |     09-01-2003 renamed ufFabBkt to ufFabSek, use it for DEL and BKT instructions
+* Joris Heirbaut        v0.4c   23-01-2003 distinguish between EOF en EOB 
+* Joris Heirbaut        v0.5    27-02-2003 dropped "fast" hash method (it was slow!)
+* Joris Heirbaut          |     22-05-2003 started    rewrite of FAB-abstraction
+* Joris Heirbaut          |     30-06-2003 terminated rewrite ...
+* Joris Heirbaut          |     08-07-2003 correction in ufMchBst (llTstNxt = *alBstNew + 1 iso -1)
+* Joris Heirbaut        v0.5    02-09-2003 production
+* Joris Heirbaut        v0.6    29-04-2005 large-file support
+*
+* TODO
+* - set glMchDst in function of sample rate
+* - avoid skipping matched because of full matching table
+* - solve problem of all invalid matches in table!!!
+* - replace giEqlCnt by better mechanism
+*
+* BUGS
+* - "no backtrace" option does not work
+*
+* Licence
+* -------
+*
+* This program is free software. Terms of the GNU General Public License apply.
+*
+* This program is distributed WITHOUT ANY WARRANTY, without even the implied
+* warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.a
+* 
+* A copy of the GNU General Public License if found in the file "Licence.txt"
+* deliverd along with this program; if not, write to the Free Software
+* Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+*
+* Parts or all of this source code may only be reused within other GNU free, open
+* source, software.
+* So if your project is not an open source project, you are non entitled to read
+* any further below this line!
+*
+* Exit codes
+* ----------
+*  0  ok, differences found
+*  1  ok, no differences found
+*  2  error: not enough arguments
+*  3  error: could not open first input file
+*  4  error: could not open second input file
+*  5  error: could not open output file
+*  6  error: seek error
+*  7  error: malloc failed
+*
+*******************************************************************************/
+
+
+/*
+ * Includes
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <limits.h>
+#include <objbase.h>
+
+/*
+ * Local definitions
+ */
+#define true  1
+#define false 0
+#define ulong unsigned long int // unsigned long
+#define MCH_MAX 128             // Maximum size of matching table
+#define EOB EOF - 1             // End-Of-Buffer constant
+
+#define fopen   fopen
+#define fclose  fclose
+#define fseek   fseek
+
+/*
+ * Large-file definitions
+ */
+#ifdef __CYGWIN__
+
+#ifdef _JDIFF_LARGEFILE
+#define off_t   off_t
+#define PRIzd	"lld"
+#define P8zd	"%8lld"
+#else
+#define off_t   long int
+#define PRIzd	"ld"
+#define P8zd	"%8ld"
+#endif /* JDIFF_LARGEFILE */
+
+#else /* Defaults */
+
+#define off_t   off_t
+#define PRIzd	"zd"
+#define P8zd	"%8zd"
+
+#endif /* __CYGWIN__ */
+
+/*
+ * Debug definitions
+ */
+#define debug    1        /* Include debug code? */
+#if debug
+#define AreWeHere fprintf(stderr, "test\n") ; fflush(stderr) ;
+
+#define DBGHSH 0  // Debug Hash          -dh
+#define DBGAHD 1  // Debug Ahead         -da
+#define DBGCMP 2  // Debug Compare       -dc
+#define DBGPRG 3  // Debug Progress      -dp
+#define DBGBUF 4  // Debug Ahead Buffer  -db
+#define DBGAHH 5  // Debug Ahead Hash    -dahh
+#define DBGHSK 6  // Debug ufHshNxt      -dk
+#define DBGBKT 7  // Debug ufFabSek      -dbkt
+#define DBGRED 8  // Debug ufFabGet      -dred
+#define DBGMCH 9  // Debug ufMch...      -dm
+int gbDbg[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
+#else
+#define AreWeHere ;
+#endif
+
+/*
+ * Global settings (may be modified by commandline options) 
+ */
+int giVerbse = 0;          /* Verbose level 0=no, 1=normal, 2=high            */
+int gbCmpAll = 0;          /* Compare even if data not in buffer?             */
+ulong giBufSze = 256*1024; /* File lookahead buffer size                      */
+int giEqlThr = 20 ;        /* Equal threshold: throw samples if > 32 eql. chr.*/
+FILE *stddbg;              /* Debug output to stddbg or stdout                */
+int gbSrcBkt=true;         /* Backtrace on sourcefile allowed?                */
+int giSrcScn = 0 ;         /* Prescan source file: 0=no, 1=do, 2=done         */
+int giMchMax = 8 ;         /* Maximum entries in matching table.              */
+int giMchMin = 4 ;         /* Minimum entries in matching table.              */
+ulong glMchDst = 1024 ;    /* Max distance between equals in same match.      */
+
+/* 
+ * Statistics about operations
+ */
+int giFabSek=0;         /* Number of times an fseek operation was performed  */
+off_t giOutBytDta=0;    /* Number of data    bytes written                   */
+off_t giOutBytCtl=0;    /* Number of control bytes written (overhead)        */
+off_t giOutBytDel=0;    /* Number of data    bytes deleted                   */
+off_t giOutBytBkt=0;    /* Number of data    bytes backtraced                */
+off_t giOutBytEsc=0;    /* Number of escape  bytes written (overhead)        */
+off_t giOutBytEql=0;    /* Number of data    bytes not written (gain)        */
+int giHshHit=0;         /* Number of hash hits                               */
+int giHshErr=0;         /* Number of false hash hits                         */
+int giHshRpr=0;         /* Number of repaired hash hits (by compare)         */
+int giHshEls=0;         /* Number of elements added to hashtable             */
+int giHshCol=0;         /* Number of collisions                              */
+int giHshColSeq;        /* Number of subsequent collisions.                  */
+int giHshColSeqCnt=0;   /* Number of times max number of collisions occurred.*/
+
+
+/*******************************************************************************
+* Look-ahead buffered file abstraction (FAB = File Ahead Buffer)
+*
+* A look-ahead buffered file is a file with two read modes: the "normal" read
+* mode and the look-ahead mode.
+*
+* In read mode, data is "consumed" so old data is removed from the buffer.
+* In look-ahead mode, non-read data in the buffer will not be removed.
+*
+* ufFabOpn      Open  file and allocate read-ahead buffer.
+* ufFabCls      Close file and deallocate read-ahead buffer.
+* ufFabGet      Read one byte from file.
+* ufFabFnd      Compare and find equal blocks within two files.
+*
+*******************************************************************************/
+typedef struct
+{ char *icFid;          /* file id (for debugging)                      */
+  FILE *ipFil;           /* file handle                                  */
+  unsigned char *ipBuf; /* read-ahead buffer                            */
+  unsigned char *ipMax; /* read-ahead buffer end                        */
+  unsigned char *ipInp; /* current input position (null=out of buf)     */
+  off_t ilPosRed;       /* current file position                        */
+  off_t ilPosInp;       /* last position in buffer                      */
+  off_t ilPosSek;       /* current position in file                     */
+  off_t ilPosEof;       /* last    position in file                     */
+  long iiBufSze;        /* number of bytes in buffer                    */
+} Fab ;
+
+/* -----------------------------------------------------------------------------
+ * ufFabOpn: open buffered lookahead file
+ * ---------------------------------------------------------------------------*/
+int ufFabOpn ( Fab *asFab, char *acNam, char *acFid )
+{
+  asFab->icFid = acFid ;
+  asFab->ipFil = fopen(acNam, "rb") ;
+  if ( asFab->ipFil == NULL ) return(false) ; 
+
+  asFab->ipBuf = malloc(giBufSze) ;
+  if ( asFab->ipBuf == NULL ) return(false) ;
+  asFab->ipMax = asFab->ipBuf + giBufSze ;
+  asFab->ipInp = asFab->ipBuf;
+  asFab->iiBufSze = 0;
+  asFab->ilPosRed = 0;
+  asFab->ilPosSek = 0;
+  asFab->ilPosEof = -1;
+  
+  #if debug
+  if (gbDbg[DBGBUF]) 
+    fprintf(stddbg, "ufFabOpn(%s):(buf=%x,max=%x,sze=%d)\n",
+      acFid, asFab->ipBuf, asFab->ipMax, giBufSze);
+  #endif
+
+  return (true) ;
+}
+
+/* -----------------------------------------------------------------------------
+ * ufFabCls: closes buffered lookahead file
+ * ---------------------------------------------------------------------------*/
+int ufFabCls ( Fab *asFab )
+{
+  fclose(asFab->ipFil) ;
+  free(asFab->ipBuf) ;
+  return (1) ;
+}
+
+/* -----------------------------------------------------------------------------
+ * ufFabGet: gets one byte from the lookahead file
+ *
+ * Read mode consumes bytes: old bytes in the buffer get overwritten.
+ * Hard look-ahead mode performs unbuffered reading when the buffer is full.
+ * Soft look-ahead mode returns EOB when the buffer is full.
+ * ---------------------------------------------------------------------------*/
+int ufFabGet ( 
+    Fab *asFab,      /* filebuffer                           */
+    off_t *alPos,    /* position to read from                */
+    int aiTyp        /* 0=read, 1=hard ahead, 2=soft ahead   */
+)
+{ int lcInp ;
+  unsigned char *lpDta ;
+
+  /* Eof ? */
+  if (asFab->ilPosEof != -1)
+    if (*alPos >= asFab->ilPosEof) {
+      #if debug
+      if (gbDbg[DBGRED]) 
+        fprintf(stddbg, "ufFabGet(%s,"P8zd",%d)->EOF (mem).\n", 
+           asFab->icFid, *alPos, aiTyp);
+      #endif
+      return EOF ;
+    }
+
+  /* Get data from buffer? */ 
+  if ((*alPos >= asFab->ilPosInp - asFab->iiBufSze ) && (*alPos < asFab->ilPosInp)) {
+    lpDta = asFab->ipInp - (asFab->ilPosInp - *alPos) ;
+    if ( lpDta < asFab->ipBuf ) lpDta += giBufSze ;
+
+    /* store actual read position */
+    if (aiTyp == 0) asFab->ilPosRed = *alPos + 1 ;
+
+    #if debug
+    if (gbDbg[DBGRED]) 
+      fprintf(stddbg, "ufFabGet(%s,"P8zd",%d)->%2x (mem %x).\n", 
+         asFab->icFid, *alPos, aiTyp, *lpDta, lpDta);
+    #endif
+
+    (*alPos)++ ;
+    return *lpDta ;
+  }
+
+  /* Soft ahead: continue only if getting at input position and buffer is not full */
+  if (aiTyp == 2 && (*alPos != asFab->ilPosInp || *alPos - asFab->ilPosRed > giBufSze))  {
+    #if debug
+    if (gbDbg[DBGRED]) 
+      fprintf(stddbg, "ufFabGet(%d,"P8zd",%d)->EOB.\n", 
+         asFab->icFid, *alPos, aiTyp);
+    #endif
+    return EOB ;
+  }
+
+  /* Seek if file position is not at the correct position */
+  if (*alPos != asFab->ilPosSek) {
+    #if debug
+    if (gbDbg[DBGBUF]) fprintf(stddbg, "ufFabGet: Inner seek %"PRIzd".\n", asFab->ilPosInp);
+    #endif
+      
+    giFabSek++ ;
+    if (fseek(asFab->ipFil, *alPos, SEEK_SET) == EOF ) 
+    {
+      fprintf(stderr, "Could not reposition on file (inner seek %"PRIzd")!", asFab->ilPosInp);
+      exit(6);
+    }
+    asFab->ilPosSek = *alPos ;
+  }
+
+  /* Read data from file */
+  lcInp = getc(asFab->ipFil) ;
+  if (lcInp == EOF) {
+    #if debug
+    if (gbDbg[DBGRED]) 
+      fprintf(stddbg, "ufFabGet(%d,"P8zd",%d)->EOF.\n", 
+         asFab->icFid, *alPos, aiTyp);
+    #endif
+
+    asFab->ilPosEof = *alPos ;
+    return EOF ;
+  }
+  else
+    asFab->ilPosSek++;
+
+  /* Read mode: reset buffer */
+  if (aiTyp == 0) {
+    if (*alPos != asFab->ilPosInp) {
+      asFab->iiBufSze = 0 ;
+      asFab->ilPosInp = *alPos ;
+    }
+
+    /* Set read position */
+    asFab->ilPosRed = *alPos ;
+  }
+
+  /* Store within buffer */
+  if (*alPos == asFab->ilPosInp && *alPos - asFab->ilPosRed < giBufSze) {
+    #if debug
+    if (gbDbg[DBGRED]) 
+      fprintf(stddbg, "ufFabGet(%s,"P8zd",%d)->%2x (sto %x).\n", 
+         asFab->icFid, *alPos, aiTyp, lcInp, asFab->ipInp);
+    #endif
+
+    *asFab->ipInp = (unsigned char) lcInp;
+
+    asFab->ilPosInp ++ ;
+    asFab->ipInp ++ ;
+    if ( asFab->ipInp == asFab->ipMax ) asFab->ipInp = asFab->ipBuf ;
+    if ( asFab->iiBufSze < giBufSze   ) asFab->iiBufSze ++ ;
+  } else {
+    #if debug
+    if (gbDbg[DBGRED]) 
+      fprintf(stddbg, "ufFabGet(%s,"P8zd",%d)->%2x (dirty).\n", 
+         asFab->icFid, *alPos, aiTyp, lcInp);
+    #endif
+  }
+    
+  /* Set new read position */
+  if (aiTyp == 0) asFab->ilPosRed ++ ; 
+  (*alPos)++ ;
+
+  return lcInp ;
+} 
+
+/* -----------------------------------------------------------------------------
+ * ufFabFnd: compare files at given offsets
+ *
+ * Searches at given positions for a run of 24 equal bytes.
+ * Searching continues for the given length unless soft-reading is specified
+ * and the end-of-buffer is reached.
+ *
+ * Arguments:      asFilOrg    in      first file
+ *                 asFilNew    in      second file
+ *                 alPosOrg    in/out  position on first file
+ *                 alPosNew    in/out  position on second file
+ *                 aiLen       in      number of bytes to compare
+ *                 aiSft       in      1=hard read, 2=soft read
+ *
+ * Return value:   0 = run of 24 equal bytes found
+ *                 1 = end-of-buffer reached
+ *                 2 = no run of equal byes found
+ * ---------------------------------------------------------------------------*/
+int ufFabFnd (
+    Fab *asFilOrg, Fab *asFilNew, 
+    off_t *alPosOrg, off_t *alPosNew,
+    int aiLen, int aiSft
+    )
+{ int liOrg ;
+  int liNew ;
+  int liEql=0 ;
+  int liRet=0 ;
+
+  #if debug
+  if (gbDbg[DBGCMP]) 
+    fprintf( stddbg, "Fnd ("P8zd","P8zd",%4d,%d): ",
+      *alPosOrg, *alPosNew, aiLen, aiSft) ;
+  #endif 
+
+  /* Compare bytes */
+  for (; aiLen > 24 && liRet == 0 && liEql < 24; aiLen--) {
+    liOrg = ufFabGet(asFilOrg, alPosOrg, aiSft) ;
+    liNew = ufFabGet(asFilNew, alPosNew, aiSft) ;
+
+    if (liOrg <= EOF || liNew <= EOF) 
+      liRet = 1 ;
+    else if (liOrg != liNew) 
+      liEql = 0 ;
+    else
+      liEql ++ ;
+  }
+
+  /* Compare last 24 bytes */
+  for (; aiLen > 0 && liRet == 0 && liEql < 24; aiLen--) {
+    liOrg = ufFabGet(asFilOrg, alPosOrg, aiSft) ;
+    liNew = ufFabGet(asFilNew, alPosNew, aiSft) ;
+
+    if (liOrg <= EOF || liNew <= EOF) 
+      liRet = 1 ;
+    else if (liOrg != liNew) 
+      liRet = 2 ;
+    else
+      liEql ++ ;
+  }
+
+  #if debug
+  if (gbDbg[DBGCMP]) 
+    fprintf( stddbg, ""P8zd" "P8zd" %2d %s (%c)%3o == (%c)%3o\n", 
+             *alPosOrg - liEql, *alPosNew - liEql, liEql,  
+             (liRet==0)?"OK!":(liRet==1)?"EOF":"NOK",
+             (liOrg>=32 && liOrg <= 127)?liOrg:' ',liOrg,  
+             (liNew>=32 && liNew <= 127)?liNew:' ',liNew);
+  #endif
+
+  switch (liRet) 
+  { case 0: 
+      *alPosOrg = *alPosOrg - liEql ;
+      *alPosNew = *alPosNew - liEql ;
+      return 0 ; /* equality found */
+    case 1:
+      if (liOrg == EOF || liNew == EOF)
+        return 2 ; /* surely different (hard eof reached) */
+      else
+      { *alPosOrg = *alPosOrg + aiLen ;
+        *alPosNew = *alPosNew + aiLen ;
+        return 1 ; /* may be different (soft eof reached) */
+      } 
+    case 2: 
+      return 2 ; /* surely different */
+  }
+}
+
+/*******************************************************************************
+* Hash table functions:
+*  ufHshIni     Initialize hash table (allocate and memset)
+*  ufHshAdd     Insert value into hashtable
+*  ufHshGet     Lookup value into hashtable 
+*  ufHshNxt     Incremental hash function on array of bytes
+*
+* The hash table stores positions within files. The key reflects the contents
+* of the file at that posistion. This way, we can efficiently find regions
+* that are equal between both files.
+*
+* Hash function on array of bytes:
+*
+* Principle:
+* ----------
+* Input:  a[32]  24 8-bit values
+*         p      prime number
+* Output: h = (a[31] x 2^31 + a[30] . 2^30 + .. + a[0]) % 2^32 % p
+*
+* 
+* Largest n-bit primes: 251, 509, 1021, 2039, 4093, 8191, 16381, 32749, 65521, 
+*                       131071 (17 bit), ..., 4294967291 (32 bit)
+*
+* Table entries contain a 32-bit hash value and a file position.
+*
+* The collision strategy tries to create a uniform distributed set of samples
+* over the investigated region, which is either the whole file or the 
+* look-ahead region.
+* This is achieved by overwriting the original entry only if
+* - the original entry lies before the investigatd region (the base position)
+* - a number of subsequent non-overwriting collisions occur where
+*   number = (region size / hashtable size) + 2
+*
+* Only samples from the original file are stored. 
+* Samples from the new file are looked up.
+*
+* The investigated region is either
+* - the whole file when the prescan/backtrace option is used (default)
+* - the look-ahead region otherwise (options -f or -ff)
+*
+* With prescan/backtrace enabled, the algorithm behaves like a kind of 
+* copy/insert algorithm (simulated with insert/delete/modify and backtrace
+* instructions). Without prescan/backtrace, the algorithm behaves like an
+* insert/delete algorithm.
+*
+*******************************************************************************/
+
+/* List of primes we select from when size is specified on commandline */
+int   giPme[24] = { 2147483647, 1073741789, 536870909,  268435399,  
+                     134217689,   67108859,  33554393,   16777213,    
+                       8388593,    4194301,   2097143,    1048573,
+                        524287,     262139,    131071,      65521,
+                         32749,      16381,      8191,       4093,
+                          2039,       1021,       509,        251} ;
+
+/* -----------------------------------------------------------------------------
+ * "Constants", modifiable by commandline options
+ * ---------------------------------------------------------------------------*/
+int   giHshIdx = 17 ;      /* choosen prime from giPme                        */
+int   giHshPme = 16381 ;   /* default largest 16-bit prime for hashing        */
+
+/* -----------------------------------------------------------------------------
+ * Hashtable variables
+ * ---------------------------------------------------------------------------*/
+int   giHshColMax;          /* max number of collisions before override       */
+ulong glHshColMaxPos;       /* increment giHshColMax if position gets larger  */
+
+int   giHshSze ;            /* Actual size of the hashtable                   */
+
+/* The hash table. Using a struct causes certain compilers (gcc) to align     */
+/* fields on 64-bit boundaries, causing 25% memory loss. Therefore, I use     */
+/* two arrays instead of an array of structs.                                 */
+off_t *gpHshTblPos = NULL ; /* Position within the file                       */
+ulong *gpHshTblHsh = NULL ; /* Hash key                                       */
+
+/* -----------------------------------------------------------------------------
+ * Initialization
+ * ---------------------------------------------------------------------------*/
+void ufHshIni ()
+{ 
+  if ( gpHshTblPos == NULL ) {
+    giHshSze = giHshPme * (sizeof(off_t) + sizeof(ulong));
+    gpHshTblPos = malloc(giHshSze) ;
+    gpHshTblHsh = (ulong *) &gpHshTblPos[giHshPme] ;
+    
+    #if debug
+    if (gbDbg[DBGHSH]) 
+      fprintf(stddbg, "Hash Ini sizeof=%2d+%2d=%2d, %d samples, %d bytes, address=%x-%x,%x-%x.\n", 
+        sizeof(ulong), sizeof(off_t), sizeof(ulong) + sizeof(off_t), 
+        giHshPme, giHshSze, 
+	gpHshTblPos, &gpHshTblPos[giHshPme], gpHshTblHsh, &gpHshTblHsh[giHshPme]) ;
+    #endif
+
+    giHshColSeq    = 0;
+    giHshColMax    = 2;
+    glHshColMaxPos = giHshPme;
+  }
+  if ( gpHshTblPos == NULL ) {
+    fprintf(stddbg, "Insufficient memory!");
+    exit(7) ;
+  }
+  memset(gpHshTblPos, 0, giHshSze) ;
+}
+
+/* -----------------------------------------------------------------------------
+ * The hash function
+ * ---------------------------------------------------------------------------*/
+void ufHshNxt ( int aiCurVal, ulong *alCurHsh )
+{ *alCurHsh =  ((*alCurHsh) << 1) + aiCurVal ;
+  #if debug
+  if (gbDbg[DBGHSK]) 
+    fprintf(stddbg, "Hash Key %x %x %c\n", *alCurHsh, aiCurVal,
+      (aiCurVal>=32 && aiCurVal <= 127)?aiCurVal:' ');
+  #endif
+}
+
+/* -----------------------------------------------------------------------------
+ * The hashtable insert and lookup function
+ * ---------------------------------------------------------------------------*/
+void ufHshAdd (ulong alCurHsh, off_t alPos, off_t alBse )
+{ int   llKey ;         /* alCurHsh % prime */
+
+  /* calculate key and the corresponding entries' address */
+  llKey    = (alCurHsh % giHshPme) ;
+
+  /* keep giHshColMax == glHshColMaxPos / giHshPme + 2 */
+  if ( alPos - alBse >= glHshColMaxPos ) 
+  {
+    glHshColMaxPos += giHshPme ;
+    giHshColMax ++ ;
+  }
+  
+  /* store key and value
+  *  existing entries are overwritten if they are "old", that is
+  *  they are before the actual read position, or if more
+  *  than giHshColMax subsequent collisions occured  
+  */
+
+  /* count elements and collisions */
+  if ((gpHshTblPos[llKey] <= alBse))
+    giHshEls++ ; /* entry is emty, element will be added */
+  else 
+  { 
+    giHshCol++ ; /* entry is not empty, collision occurs */
+    giHshColSeq++ ;
+    if (giHshColSeq >= giHshColMax) giHshColSeqCnt++;
+  }
+
+  /* store key and value
+   * existing entries are overwritten if
+   * - they are old (older than alBse)
+   * - more than a maximum number of subsequent collisions occurred
+   */
+  if ((gpHshTblPos[llKey] <= alBse) || (giHshColSeq >= giHshColMax))
+  { 
+    #if debug
+    if (gbDbg[DBGHSH]) 
+      fprintf(stddbg, "Hash Add %8d " P8zd " %8x %c\n", 
+        llKey, alPos, alCurHsh,
+        (gpHshTblHsh[llKey] == 0)?'.':'!');
+    #endif
+
+    gpHshTblHsh[llKey] = alCurHsh ;
+    gpHshTblPos[llKey] = alPos ;
+    giHshColSeq   = 0 ;
+  }
+}
+
+off_t ufHshGet (ulong alCurHsh)
+{ int   llKey ;         /* alCurHsh % prime */
+
+  /* calculate key and the corresponding entries' address */
+  llKey    = (alCurHsh % giHshPme) ;
+
+  /* lookup value into hashtable for new file */
+  if (gpHshTblHsh[llKey] == alCurHsh) 
+  {
+    giHshHit++;
+    return gpHshTblPos[llKey];
+  }
+  return 0 ;
+}
+
+/* -----------------------------------------------------------------------------
+ * Print hashtable content (for debugging or auditing)
+ * ---------------------------------------------------------------------------*/
+void ufHshPnt() 
+{ int liHshIdx;
+  int liCnt=0;
+
+  for (liHshIdx = 0; liHshIdx < giHshPme; liHshIdx ++) 
+  {
+    if (gpHshTblPos[liHshIdx] != 0) 
+    {
+      liCnt ++ ;
+      fprintf(stddbg, "Hash Pnt %06d "P8zd"-%08x\n", liHshIdx, 
+          gpHshTblPos[liHshIdx], gpHshTblHsh[liHshIdx]) ;
+    }
+  }
+  fprintf(stddbg, "Hash table load:       %d%%\n", liCnt / giHshPme / 2) ;
+  fprintf(stddbg, "Hash table collisions: %d\n", giHshCol) ;
+}
+
+ 
+/*******************************************************************************
+* Matching table functions
+*
+* The matching table contains a series of possibly matching regions between
+* the two files. 
+* 
+* Because of the statistical nature of the hash table, we're not sure that the
+* best solution will be found first. Consider, for example, that the samplerate 
+* is at 10% on files of about 10Mb and equal regions exist at positions 1000-2000 
+* and 1500-1500. Because 10% of 10Mb means one sample every 1024 bytes, 
+* it can happen that the 1000-2000 region is only discovered at positions 2000-3000 
+* (1000 bytes later). If the 1500-1500 region gets found first at say 1700-1700, 
+* and if we would not optimize the found solutions, then 500 equal bytes would 
+* get lost.
+*
+* Therefore we first memorize a number of matching postions found with the hashtable, 
+* optimize them (look 1024 bytes back) and then select the first matching solution.
+*
+* ufMchIni      Initializes the matching table
+* ufMchAdd      Adds a potential solution to the mach table
+* ufMchFre      Checks if there is room for new solutions
+* ufMchBst      Optimizes the matches and returns the best one
+* 
+*******************************************************************************/
+off_t glMchBeg[MCH_MAX];   /* first found match                                 */ 
+off_t glMchOrg[MCH_MAX];   /* last  found match (original file position)        */
+off_t glMchNew[MCH_MAX];   /* last  found match (new      file position)        */
+int   giMchCnt[MCH_MAX];   /* number of colliding matches                       */
+
+off_t glMchTst[MCH_MAX];   /* result of last find for this entry                */
+off_t glMchFnd[MCH_MAX];   
+int   giMchCmp[MCH_MAX];  
+
+void ufMchIni () { memset(giMchCnt, 0, MCH_MAX * sizeof(int)) ; }
+
+/* -----------------------------------------------------------------------------
+ * Auxiliary function: ufMchAdd
+ * Add given match to the array of matches:
+ * - add to colliding match if possible, or
+ * - add at the end of the list, or 
+ * - override an old match otherwise
+ * Returns 
+ *  -1   if regions are found different
+ *   0   if a new entry has been added and table is full
+ *   1   if a new entry has been added
+ *   2   if an existing entry has been enlarged
+ * ---------------------------------------------------------------------------*/
+int ufMchAdd (
+  Fab   *asFilOrg,
+  Fab   *asFilNew,
+  off_t alFndOrgAdd,      /* match to add               */
+  off_t alFndNewAdd,
+  off_t alBseNew
+)
+{ int liIdx;    /* scrolls through all matches                  */
+  int liFre=-1; /* points to the first free entry               */
+  int liNxt=-1; /* points to the next  free entry               */
+
+  alFndOrgAdd -= 24 ;
+  alFndNewAdd -= 24 ;
+
+  /* entries before alBseNew do not make any sense */
+  /* if (alFndNewAdd < alBseNew) return -1 ; */
+  
+  /* add to existing match or find oldest match */
+  for (liIdx=0; liIdx < giMchMax ; liIdx++)
+    if (giMchCnt[liIdx] == 0)
+    { if (liFre == -1 || giMchCnt[liFre] != 0)
+      { liNxt = liFre ;
+        liFre = liIdx ;
+      }
+      else if (liNxt == -1)
+      { liNxt = liIdx ;
+      }
+    } 
+    else
+    { /* add to colliding match if possible */
+      if ((alFndOrgAdd - glMchOrg[liIdx] == alFndNewAdd - glMchNew[liIdx]) && 
+          (alFndNewAdd <= glMchNew[liIdx] + glMchDst) &&
+          (alFndNewAdd + glMchDst >= glMchBeg[liIdx]))
+      {
+        /*#if debug
+         if (gbDbg[DBGMCH])
+          fprintf(stddbg, "Mch ("P8zd","P8zd") Col (%2d,"P8zd","P8zd") Bse ("P8zd") %s\n",
+                  alFndOrgAdd, alFndNewAdd, liIdx, glMchOrg[liIdx], glMchNew[liIdx], alBseNew,
+                  (glMchNew[liIdx] == alFndNewAdd)?"Bst":"   ") ; 
+        #endif*/
+  
+        giMchCnt[liIdx] ++ ; 
+        if (alFndNewAdd > glMchNew[liIdx])
+        { glMchNew[liIdx] = alFndNewAdd ;
+          glMchOrg[liIdx] = alFndOrgAdd ;
+        } else if (alFndNewAdd < glMchBeg[liIdx])
+        { glMchBeg[liIdx] = alFndNewAdd ;
+        }
+  
+        return 2 ;  
+      }
+  
+      /* get oldest match */
+      if (glMchNew[liIdx] < alBseNew) 
+      { if ((liFre == -1) || (giMchCnt[liFre] != 0 && glMchNew[liIdx] < glMchNew[liFre]))
+        { liNxt = liFre ;
+          liFre = liIdx ;
+        }
+        else if (liNxt == -1)
+        { liNxt = liIdx ;
+        }
+      }
+    }
+
+  /* override an old entry if there's no more place */
+  if (liFre == -1)
+  {
+    #if debug
+    if (gbDbg[DBGMCH]) fprintf(stddbg, "Mch ("P8zd", "P8zd") Ful\n", alFndOrgAdd, alFndNewAdd) ;
+    #endif
+    return 0 ;
+  }
+  else 
+  { 
+    glMchOrg[liFre] = alFndOrgAdd ;
+    glMchNew[liFre] = alFndNewAdd ;
+    glMchBeg[liFre] = alFndNewAdd ;
+    glMchTst[liFre] = 0 ;
+    glMchFnd[liFre] = 0 ;
+    giMchCmp[liFre] = 0 ;
+    giMchCnt[liFre] = 1 ;
+
+    #if debug
+    if (gbDbg[DBGMCH])
+      fprintf(stddbg, "Mch ("P8zd","P8zd") New (%2d,"P8zd","P8zd") Bse ("P8zd") %s\n",
+              alFndOrgAdd, alFndNewAdd, liFre, glMchOrg[liFre], glMchNew[liFre], alBseNew,
+              (glMchNew[liFre] == alFndNewAdd)?"Bst":"   ") ;
+    #endif
+
+    if (liNxt != -1)
+      return 1 ; /* added, still room for new entries */
+    else
+      return 0 ; /* added, table if now full */
+  }
+}
+
+/* -----------------------------------------------------------------------------
+ * ufMchFre: check if there is free space in the table of matches
+ * ---------------------------------------------------------------------------*/
+int ufMchFre ( off_t alBseNew )
+{ int liIdx ;
+  for (liIdx=0; liIdx < giMchMax ; liIdx++)
+    if (giMchCnt[liIdx] == 0 || glMchNew[liIdx] < alBseNew)
+      return true ;
+  return false ;
+}
+
+/* -----------------------------------------------------------------------------
+ * Auxiliary function: ufMchBst
+ * Get the best match from the array of matches
+ * ---------------------------------------------------------------------------*/
+int ufMchBst (
+  Fab   *asFilOrg,      /* files                */
+  Fab   *asFilNew,
+  off_t alBseOrg,       /* base positions       */
+  off_t alBseNew,
+  off_t *alBstOrg,      /* best position found  */
+  off_t *alBstNew
+)
+{
+  int liIdx ;           /* investigated  match.                         */
+  int liBst=-1 ;        /* selected best match.                         */
+  int liChk ;           /* check match to investigate                   */
+  int liNxt ;           /* first match to investigate                   */
+  int liCmp ;           /* compare status                               */
+
+  off_t llTstNew ;      /* test positions                               */
+  off_t llTstOrg ;
+  off_t llTstBse ;
+  off_t llTstNxt ;
+
+  int lbStr ;
+
+  off_t llSwp ;
+  int   liSwp ;
+
+  for (liIdx=0, liNxt=0; liIdx < giMchMax && liNxt >= 0; liIdx ++)
+  {  /* find first valuable entry */
+    if (liBst == -1)
+      liNxt = -1 ;
+    else
+    { liNxt    = liBst ;
+      llTstNxt = *alBstNew + 1 ;
+    }
+  
+    for (liChk = liIdx; liChk < giMchMax && giMchCnt[liChk] > 0; liChk ++)
+      if (giMchCnt[liChk] > 0)
+      { /* calculate the test position */
+        if (glMchNew[liChk] + glMchDst >= alBseNew) 
+        { if (glMchBeg[liChk] <= alBseNew + glMchDst - 24)
+            llTstNew = alBseNew ;
+          else 
+            llTstNew = glMchBeg[liChk] - glMchDst + 24 ;
+        }
+        else
+          llTstNew = 0;
+  
+        /* is this entry the first valuable? */
+        if (llTstNew > 0)
+        { if (liNxt == -1) 
+          { llTstNxt = llTstNew ;
+            liNxt    = liChk ;
+          } 
+          else if (llTstNew < llTstNxt) 
+          { llTstNxt = llTstNew ;
+            liNxt    = liChk ;
+          } 
+        }
+      }
+  
+    /* valuable entry found? */
+    if (liNxt <= liBst)
+      liNxt = -1 ; /* exit from loop */
+    else
+    { lbStr = false ;
+      liCmp = 0 ;
+  
+      /* swap next entry to current position */
+      if (liNxt != liIdx)
+      { llSwp = glMchBeg[liIdx] ; glMchBeg[liIdx] = glMchBeg[liNxt] ; glMchBeg[liNxt] = llSwp ;
+        llSwp = glMchNew[liIdx] ; glMchNew[liIdx] = glMchNew[liNxt] ; glMchNew[liNxt] = llSwp ;
+        llSwp = glMchOrg[liIdx] ; glMchOrg[liIdx] = glMchOrg[liNxt] ; glMchOrg[liNxt] = llSwp ;
+        liSwp = giMchCnt[liIdx] ; giMchCnt[liIdx] = giMchCnt[liNxt] ; giMchCnt[liNxt] = liSwp ;
+        llSwp = glMchTst[liIdx] ; glMchTst[liIdx] = glMchTst[liNxt] ; glMchTst[liNxt] = llSwp ;
+        llSwp = glMchFnd[liIdx] ; glMchFnd[liIdx] = glMchFnd[liNxt] ; glMchFnd[liNxt] = llSwp ;
+        liSwp = giMchCmp[liIdx] ; giMchCmp[liIdx] = giMchCmp[liNxt] ; giMchCmp[liNxt] = liSwp ;
+      }
+
+      /* calculate corresponding original position */
+      llTstNew = llTstNxt ;
+      llTstBse = llTstNxt ;
+      if (liCmp == 0)
+      { if (glMchOrg[liIdx] + llTstNew >= glMchNew[liIdx])
+          llTstOrg = glMchOrg[liIdx] + llTstNew - glMchNew[liIdx] ;
+        else
+          liCmp = 4 ;
+      }
+
+      /* compare */
+      if (liCmp == 0) 
+      { /* do not compare a same entry twice */
+        if (glMchTst[liIdx] > 0 && llTstNew >= glMchTst[liIdx] && llTstNew <= glMchFnd[liIdx])
+        {
+          /* use stored result */
+          lbStr = true ;
+          liCmp = giMchCmp[liIdx] ;
+          llTstNew = glMchFnd[liIdx] ;
+          llTstOrg = glMchOrg[liIdx] + llTstNew - glMchNew[liIdx] ;
+        }
+        else
+        { 
+          /* find equality */
+          liCmp = ufFabFnd(asFilOrg, asFilNew, &llTstOrg, &llTstNew, glMchDst, gbCmpAll?1:2) ;
+
+          /* soft eof reached, then rely on hash function */
+          if (liCmp == 1 && giMchCnt[liIdx] <= 3) 
+            liCmp = 7 ;
+
+          /* remove false matches */
+          if (liCmp == 2 && giMchCnt[liIdx] == 1 && llTstBse <= glMchBeg[liIdx] && llTstNew > glMchBeg[liIdx])
+          { giMchCnt[liIdx] = 0 ;
+            liCmp = 2 ;
+            giHshRpr++ ;
+          }
+
+          /* keep the result for later */
+          if (liCmp <= 1)
+          { glMchTst[liIdx] = llTstBse ;
+            glMchFnd[liIdx] = llTstNew ;
+            giMchCmp[liIdx] = liCmp ;
+          }
+        }
+      }
+  
+      /* evaluate */
+      if (liCmp <= 1)
+      { if ((liBst == -1) || 
+            (llTstNew + 4 <= *alBstNew) || 
+            ((llTstNew <= *alBstNew + 4) && (giMchCnt[liIdx] > giMchCnt[liBst]))) 
+        { *alBstNew = llTstNew ;
+          *alBstOrg = llTstOrg ;
+          liBst     = liIdx ;
+        }
+      }
+
+      /* show table */
+      #if debug
+      if (gbDbg[DBGMCH])
+        fprintf(stddbg, "Mch %2d:%2d:%1d%c%c["P8zd","P8zd","P8zd",%4d,"P8zd"] F="P8zd"="P8zd"\n", 
+          liIdx, liNxt, liCmp, 
+          (liBst == liIdx)?'*':
+            (liCmp==0)    ?'=':
+              (liCmp==1)  ?'?':' ', 
+          (lbStr)?'!':' ',
+          glMchBeg[liIdx], glMchOrg[liIdx], glMchNew[liIdx], giMchCnt[liIdx],
+          glMchOrg[liIdx] - glMchNew[liIdx], 
+          llTstBse, llTstNew) ;
+      #endif
+    } 
+  } 
+
+  /* show table */
+  #if debug
+  for (; liIdx < giMchMax ; liIdx ++)
+  if (gbDbg[DBGMCH])
+    fprintf(stddbg, "Mch %2d:  :   ["P8zd","P8zd","P8zd",%4d,"P8zd"]\n", 
+      liIdx, 
+      glMchBeg[liIdx], glMchOrg[liIdx], glMchNew[liIdx], giMchCnt[liIdx],
+      glMchOrg[liIdx] - glMchNew[liIdx]) ;
+  #endif
+
+  if (liBst == -1)
+  { 
+    #if debug
+    if (gbDbg[DBGMCH])
+      fprintf(stddbg, "Mch Err\n") ;
+    #endif
+    return -1 ;
+  }
+  else 
+    return liBst ;
+}
+
+/*******************************************************************************
+* Find Ahead function
+*
+* Read ahead on both files until we possibly found an equal series of 32 bytes 
+* in both files.
+* Then calculate the deplacement vector between two files:
+* - positive if characters need to be inserted in the original file,
+* - negative if characters need to be removed from the original file.
+*******************************************************************************/
+
+/* -----------------------------------------------------------------------------
+ * Auxiliary function:
+ * Get next character from file (lookahead) and count number of equal chars
+ * in current cluster 
+ * ---------------------------------------------------------------------------*/
+void ufFndAhdGet(Fab *asFilOut, off_t *alPos, int *aiVal, int *aiPrv, int *aiEql, int aiSft) 
+{
+  *aiPrv = *aiVal ;
+  *aiVal = ufFabGet(asFilOut, alPos, aiSft) ;
+  if (*aiPrv == *aiVal) { if (*aiEql < 32) (*aiEql)++ ; }
+  else                  { if (*aiEql > 0)  (*aiEql)-- ; }
+}
+
+/* -----------------------------------------------------------------------------
+ * Prescan the original file
+ * ---------------------------------------------------------------------------*/
+ufFndAhdScn (
+  Fab *asFilOrg
+)
+{ int liSen1 = 0xee ;
+  ulong llHshOrg=0;     // Current hash value for original file
+  int   liValOrg;       // Current file value
+  int   liPrvOrg;       // Previous file value
+  int   liEqlOrg=0;     // Number of times current value occurs in hash value
+  off_t llPosOrg=0;     // Position within original file
+
+  int   liIdx ;
+  int   liSen2=0xee;
+
+  /* Initialize hash function */
+  liValOrg = ufFabGet(asFilOrg, &llPosOrg, 1) ;
+  for (liIdx=0;(liIdx < 31) && (liValOrg > EOF); liIdx++) { 
+    ufHshNxt(liValOrg, &llHshOrg) ;
+    ufFndAhdGet(asFilOrg, &llPosOrg, &liValOrg, &liPrvOrg, &liEqlOrg, 1) ;
+  }
+
+  /* Build hashtable */
+  while (liValOrg > EOF) {
+    ufHshNxt(liValOrg, &llHshOrg) ;
+    if ( liEqlOrg < giEqlThr ) 
+    { ufHshAdd(llHshOrg, llPosOrg, 0) ;
+      #if debug
+      if (gbDbg[DBGAHH])
+        fprintf(stddbg, "ufHshAdd(%2x -> %8x, "P8zd", %8d)\n", 
+          liValOrg, llHshOrg, llPosOrg, 0);
+      #endif
+    }
+    ufFndAhdGet(asFilOrg, &llPosOrg, &liValOrg, &liPrvOrg, &liEqlOrg, 1) ;
+  }
+}
+
+/* -----------------------------------------------------------------------------
+ * The findahead function
+ * ---------------------------------------------------------------------------*/
+int ufFndAhd (
+  Fab *asFilOrg,
+  Fab *asFilNew,
+  off_t alRedOrg,       /* read position in original file                     */
+  off_t alRedNew,       /* read position in new file                          */
+  off_t *aiSkpOrg,      /* number of bytes to skip (delete) in original file  */
+  off_t *aiSkpNew,      /* number of bytes to skip (insert) in new file       */
+  off_t *aiAhd          /* number of bytes to go before similarity is reached */
+)
+{ static off_t llAhdOrg=0;   // Current ahead position on original file
+  static off_t llAhdNew=0;   // Current ahead position on new file
+  static ulong llHshOrg=0;   // Current hash value for original file
+  static ulong llHshNew=0;   // Current hash value for new file
+  static int liValOrg;       // Current file value
+  static int liValNew;       // Current file value
+  static int liPrvOrg;       // Previous file value
+  static int liPrvNew;       // Previous file value
+  static int liEqlOrg=0;     // Number of times current value occurs in hash value
+  static int liEqlNew=0;     // Number of times current value occurs in hash value
+  static int sbIni = false ; // Table of matches initialized?
+
+  off_t llFndOrg=0;   /* Found position within original file                 */
+  off_t llFndNew=0;   /* Found position within new file                      */
+  off_t llBseOrg;     /* Base position on original file: gbSrcBkt?0:alRedOrg */
+
+  int liIdx;          /* Index for initializing                         */
+  int liFnd=0;        /* Number of matches found                        */
+  int liBst;          /* Selected match                                 */
+  int liSft;          /* 1 = hard look-ahead, 2 = soft look-ahead       */
+
+  /* 
+   * Initialize table of matches on first call 
+   */
+  if (! sbIni)
+  { ufMchIni() ;
+    sbIni=true;
+  }
+  liSft = 1 ; /* find at least one match */
+
+  /* Prescan the original file? */
+  if (giSrcScn == 1) {
+    ufFndAhdScn(asFilOrg) ;
+    giSrcScn = 2 ;
+  }
+
+  /* 
+   * Re-Initialize hash function (read 31 bytes) if 
+   * - ahead position has been reset, or
+   * - read position has passed the ahead position
+   */
+  if (giSrcScn == 0 && (llAhdOrg == 0 || llAhdOrg < alRedOrg)) 
+  {
+    llAhdOrg = alRedOrg ;
+    liEqlOrg = 0 ;
+    llHshOrg = 0 ;
+
+    liValOrg = ufFabGet(asFilOrg, &llAhdOrg, liSft) ;
+    for (liIdx=0;(liIdx < 31) && (liValOrg > EOF); liIdx++)
+    { ufHshNxt(liValOrg, &llHshOrg) ;
+      ufFndAhdGet(asFilOrg, &llAhdOrg, &liValOrg, &liPrvOrg, &liEqlOrg, liSft) ;
+    }
+  }
+  if (llAhdNew == 0 || llAhdNew < alRedNew) 
+  {
+    llAhdNew = alRedNew ;
+    liEqlNew = 0 ;
+    llHshNew = 0 ;
+
+    liValNew = ufFabGet(asFilNew, &llAhdNew, liSft) ;
+    for (liIdx=0;(liIdx < 31) && (liValNew > EOF); liIdx++)
+    { ufHshNxt(liValNew, &llHshNew) ;
+      ufFndAhdGet(asFilNew, &llAhdNew, &liValNew, &liPrvNew, &liEqlNew, liSft) ;
+    }
+  }
+
+  /*
+   * Build the table of matches
+   */
+  if (ufMchFre(alRedNew))
+  {
+    /* Do not backtrace before llBseOrg */
+    llBseOrg = (gbSrcBkt?0:alRedOrg) ;
+
+    /* Do not read from original file if it has been prescanned */
+    if (giSrcScn > 0) liValOrg = EOB ;
+
+    /* Scroll through both files until an equal hash value has been found */
+    while (((liValOrg > EOF) || (liValNew > EOF )) && (liFnd < giMchMax))
+    {
+      /* insert original file's value into hashtable (if no prescanning has been done) */
+      if (liValOrg > EOF) 
+      { /* hash the new value */
+        ufHshNxt(liValOrg, &llHshOrg) ;
+
+        /* add to hash table */
+        if ( liEqlOrg < giEqlThr )
+        { ufHshAdd(llHshOrg, llAhdOrg, llBseOrg) ;
+
+          #if debug
+          if (gbDbg[DBGAHH])
+            fprintf(stddbg, "ufHshAdd(%2x -> %8x, "P8zd", "P8zd")\n", 
+              liValOrg, llHshOrg, llAhdOrg, llBseOrg);
+          #endif
+        }
+
+        /* get next value from file */
+        ufFndAhdGet(asFilOrg, &llAhdOrg, &liValOrg, &liPrvOrg, &liEqlOrg, liSft) ;
+      }
+      
+      /* check new file against original file */
+      if (liValNew > EOF)
+      { /* hash the new value and lookup in hashtable */
+        ufHshNxt(liValNew, &llHshNew) ;
+        if ( liEqlNew < giEqlThr )
+          llFndOrg = ufHshGet(llHshNew) ;
+        else
+          llFndOrg = 0 ;
+
+        /* add found position into table of matches */
+        if (llFndOrg > llBseOrg)
+        { 
+          /* add solution to the table of matches */ 
+          switch (ufMchAdd(asFilOrg, asFilNew, llFndOrg, llAhdNew, alRedNew))
+          { case 0: /* table is full */
+              liFnd = giMchMax; 
+              break;
+            case 1: /* alternative added */
+              liFnd ++ ;
+              liSft = (liFnd >= giMchMin)?2:1 ;
+              break ;
+            case 2:  ; /* alternative colided */
+            case -1: ;/* compare failed      */
+          }
+        }
+
+        /* get next value from file */
+        ufFndAhdGet(asFilNew, &llAhdNew, &liValNew, &liPrvNew, &liEqlNew, liSft) ;
+      }
+    }
+  }
+ 
+  /* 
+   * Get the best match and calculate the offsets 
+   */ 
+  liBst = ufMchBst(asFilOrg, asFilNew, alRedOrg, alRedNew, &llFndOrg, &llFndNew) ;
+  if (liBst == -1)
+  { *aiSkpOrg = 0 ;
+    *aiSkpNew = 0 ;
+    *aiAhd    = (llAhdNew - alRedNew) / 4 ;
+    if (*aiAhd < 256) *aiAhd = 256 ;
+    return false ; 
+  }
+  else
+  { 
+    if (llFndOrg >= alRedOrg)
+    { if (llFndOrg - alRedOrg >= llFndNew - alRedNew) 
+      { /* go forward on original file */
+        *aiSkpOrg = llFndOrg - alRedOrg + alRedNew - llFndNew ;
+        *aiSkpNew = 0 ;
+        *aiAhd    = llFndNew - alRedNew ; 
+      }
+      else
+      { /* go forward on new file */
+        *aiSkpOrg = 0;
+        *aiSkpNew = llFndNew - alRedNew + alRedOrg - llFndOrg ;
+        *aiAhd    = llFndOrg - alRedOrg ;
+      }
+    }
+    else
+    { /* backtrack on original file */
+      *aiSkpOrg = (int) alRedOrg - llFndOrg + llFndNew - alRedNew ;
+      if (*aiSkpOrg < alRedOrg) 
+      { *aiSkpNew = 0 ;
+        *aiSkpOrg = - *aiSkpOrg ;
+        *aiAhd = llFndNew - alRedNew ;
+      }
+      else /* do not bactrace before beginning of file */
+      { *aiSkpNew = *aiSkpOrg - (int) alRedOrg ;
+        *aiSkpOrg = - (int) alRedOrg ;
+        *aiAhd = (llFndNew - alRedNew) - *aiSkpNew ;
+      }
+
+      /* reset ahead position when backtracking */
+      llAhdOrg = 0 ;
+    }
+
+    return true ;
+  }
+}
+
+/*******************************************************************************
+* Output functions
+*
+* The output has following format
+*   <esc> <opcode> [<length>|<data>]
+* where
+*   <esc>    =   ESC
+*   <opcode> =   MOD | INS | DEL | EQL | BKT
+*   <data>   :   A series of data bytes. 
+*        The series is ended with a new "<esc> <opcode>" sequence.
+*        If an "<esc> <opcode>" sequence occurs within the data, it is
+*        prefixed with an additional <esc>.
+*        E.g.: <ESC><MOD>This data contains an <ESC><ESC><EQL> sequence.
+*   <length> :   1 to 5 bytes for specifying a 32-bit unsigned number.
+*              1 <= x < 252        1 byte:   0-251
+*            252 <= x < 508        2 bytes:  252, x-252
+*            508 <= x < 0x10000    3 bytes:  253, xx
+*        0x10000 <= x < 0x100000000        5 bytes:  254, xxxx
+*                          9 bytes:  255, xxxxxxxx
+*
+*******************************************************************************/
+#define ESC     0xA7    /* Escape       */
+#define MOD     0xA6    /* Modify       */
+#define INS     0xA5    /* Insert       */
+#define DEL     0xA4    /* Delete       */
+#define EQL     0xA3    /* Equal        */
+#define BKT     0xA2    /* Backtrace    */
+
+int gbOutEsc=false; /* Output buffer for escape character in data stream */
+
+/* ---------------------------------------------------------------
+ * ufOut is the output routine
+ *
+ * By default, ufOut = ufOutBytBin (binary output)
+ *
+ * Arguments:	int     aiOpr		operand
+ *		off_t   alLen		length of operand
+ *		int     aiOrg		character from original file
+ *		int     aiNew		character from new file
+ *		Fab     *asFilOrg	original file
+ *		Fab     *asFilNew	new file
+ *		FILE    *i		output file
+ *		off_t	alPosOrg	position within original file
+ *		off_t	alPosNew	position within new file
+ * ---------------------------------------------------------------*/
+void (*ufOut) ( 
+  int   aiOpr,
+  off_t aiLen, 
+  int   aiOrg, 
+  int   aiNew,
+  Fab   *asFilOrg, 
+  Fab   *asFilNew,
+  FILE  *asFilOut,
+  off_t alPosOrg,
+  off_t alPosNew
+); 
+
+/* ---------------------------------------------------------------
+ * ufPutLen outputs a length as follows
+ * byte1  following      formula              if number is
+ * -----  ---------      -------------------- --------------------
+ * 0-251                 1-252                between 1 and 252
+ * 252    x              253 + x              between 253 and 508
+ * 253    xx             253 + 256 + xx       a 16-bit number
+ * 254    xxxx           253 + 256 + xxxx     a 32-bit number
+ * 255    xxxxxxxx       253 + 256 + xxxxxxxx a 64-bit number
+ * ---------------------------------------------------------------*/
+void ufPutLen ( off_t aiLen, FILE *asFilOut )
+{ if (aiLen <= 252) {
+    putc(aiLen - 1, asFilOut) ;
+    giOutBytCtl += 1;
+  } else if (aiLen <= 508) {
+    putc(252, asFilOut);
+    putc((aiLen - 253), asFilOut) ;
+    giOutBytCtl += 2;
+  } else if (aiLen <= 0xffff) {
+    putc(253, asFilOut);
+    putc((aiLen >>  8)       , asFilOut) ;
+    putc((aiLen      ) & 0xff, asFilOut) ;
+    giOutBytCtl += 3;
+  } else if (aiLen <= 0xffffffff) {
+    putc(254, asFilOut);
+    putc((aiLen >> 24)       , asFilOut);
+    putc((aiLen >> 16) & 0xff, asFilOut) ;
+    putc((aiLen >>  8) & 0xff, asFilOut) ;
+    putc((aiLen      ) & 0xff, asFilOut) ;
+    giOutBytCtl += 5;
+  } 
+#ifdef _JDIFF_LARGEFILE  
+  else {
+    putc(255, asFilOut);
+    putc((aiLen >> 56)       , asFilOut) ;
+    putc((aiLen >> 48) & 0xff, asFilOut) ;
+    putc((aiLen >> 40) & 0xff, asFilOut) ;
+    putc((aiLen >> 32) & 0xff, asFilOut) ;
+    putc((aiLen >> 24) & 0xff, asFilOut);
+    putc((aiLen >> 16) & 0xff, asFilOut) ;
+    putc((aiLen >>  8) & 0xff, asFilOut) ;
+    putc((aiLen      ) & 0xff, asFilOut) ;
+    giOutBytCtl += 9;
+  }
+#endif
+}
+
+/* ---------------------------------------------------------------
+ * ufPutOpr outputs a new opcode and closes the previous
+ * data stream.
+ * ---------------------------------------------------------------*/
+void ufPutOpr ( int aiOpr, FILE *asFilOut )
+{ if (gbOutEsc) {
+    putc(ESC, asFilOut) ;
+    putc(ESC, asFilOut) ;
+    gbOutEsc = false ;
+    giOutBytEsc++ ;
+    giOutBytDta++ ;
+  }
+
+  if ( aiOpr != ESC ) {
+    putc(ESC, asFilOut);
+    putc(aiOpr, asFilOut);
+    giOutBytCtl+=2;
+  }
+}
+
+/* ---------------------------------------------------------------
+ * ufPutByt outputs a byte, prefixing a data sequence <esc> <opcode>
+ * with an addition <esc> byte.
+ * ---------------------------------------------------------------*/
+void ufPutByt ( int aiByt, FILE *asFilOut )
+{ int liCnt = 0;
+  
+  if (gbOutEsc) {
+    gbOutEsc = false;
+    if (aiByt >= BKT && aiByt <= ESC) {
+      /* output an additional <esc> byte */
+      putc(ESC, asFilOut) ;
+      giOutBytEsc++ ;
+    }
+    putc(ESC, asFilOut) ;
+    giOutBytDta++;
+  }
+  if (aiByt == ESC) {
+    gbOutEsc = true ;
+  } else {
+    putc(aiByt, asFilOut) ;
+    giOutBytDta++;
+  }
+}
+
+/* ---------------------------------------------------------------
+ * ufOutBytBin: binary output function for generating patch files
+ * ---------------------------------------------------------------*/
+void ufOutBytBin ( 
+  int   aiOpr,
+  off_t aiLen, 
+  int   aiOrg, 
+  int   aiNew,
+  Fab   *asFilOrg, 
+  Fab   *asFilNew,
+  FILE  *asFilOut,
+  off_t alPosOrg,
+  off_t alPosNew 
+)
+{ static int   liOprCur = ESC ; 
+  static off_t liEqlCnt = 0;    /* number of subsequent equal bytes */
+  static int   liEqlBuf[4];     /* first four equal bytes */
+  int liCnt ;
+
+  /* Output a pending EQL operand (if more than 4 equal bytes) */
+  if (liEqlCnt > 0 && aiOpr != EQL) {
+    if (liEqlCnt > 4 || (liOprCur != MOD && aiOpr != MOD)) {
+      liOprCur = EQL;
+      ufPutOpr(EQL, asFilOut) ;
+      ufPutLen(liEqlCnt, asFilOut);
+
+      giOutBytEql+=liEqlCnt;
+    } else {
+      if (liOprCur != MOD) {
+        liOprCur = MOD ;
+        ufPutOpr(MOD, asFilOut) ;
+      }
+      for (liCnt=0; liCnt < liEqlCnt; liCnt++) 
+        ufPutByt(liEqlBuf[liCnt], asFilOut) ;
+    }
+    liEqlCnt=0;
+  }
+
+  /* Handle current operand */
+  switch (aiOpr) {
+    case ESC : /* before closing the output */
+      ufPutOpr(ESC, asFilOut);
+      liOprCur = ESC ;
+      break;
+
+    case MOD :
+    case INS :
+      if (liOprCur != aiOpr) {
+        liOprCur = aiOpr ;
+        ufPutOpr(aiOpr, asFilOut) ;
+      }
+      ufPutByt(aiNew, asFilOut) ;
+      break;
+      
+    case DEL :
+      ufPutOpr(DEL, asFilOut) ;
+      ufPutLen(aiLen, asFilOut);
+
+      liOprCur=DEL;
+      giOutBytDel+=aiLen;
+      break;
+
+    case BKT :
+      ufPutOpr(BKT, asFilOut) ;
+      ufPutLen(aiLen, asFilOut);
+
+      liOprCur=BKT;
+      giOutBytBkt+=aiLen;
+      break;
+
+    case EQL :
+      if (liEqlCnt < 4) liEqlBuf[liEqlCnt] = aiOrg ; 
+      liEqlCnt ++ ;
+      break;
+  }
+}
+
+/* ---------------------------------------------------------------
+ * ufOutBytAsc: simple ascii output function for visualisation
+ * ---------------------------------------------------------------*/
+void ufOutBytAsc ( 
+  int   aiOpr, 
+  off_t aiLen,
+  int   aiOrg, 
+  int   aiNew,
+  Fab   *asFilOrg, 
+  Fab   *asFilNew,
+  FILE  *asFilOut,
+  off_t alPosOrg,
+  off_t alPosNew 
+)
+{ static int liOprCur ;
+
+  if (alPosOrg > 0) 
+    fprintf(asFilOut, ""P8zd" ", alPosOrg) ;
+  else
+    fprintf(asFilOut,"         ");
+  if (alPosNew > 0) 
+    fprintf(asFilOut, ""P8zd" ", alPosNew) ;
+  else
+    fprintf(asFilOut,"         ");
+
+  switch (aiOpr) {
+    case (MOD) :
+      fprintf(asFilOut, "MOD %3o %3o %c-%c\n", aiOrg, aiNew, 
+        ((aiOrg >= 32 && aiOrg <= 127)?(char) aiOrg:' '),
+        ((aiNew >= 32 && aiNew <= 127)?(char) aiNew:' '));
+          
+      if (liOprCur != aiOpr) {
+        liOprCur = aiOpr ;
+        giOutBytCtl+=2;
+      }
+      if (aiNew == ESC) giOutBytEsc++;
+      giOutBytDta++;
+      break;
+        
+    case (INS) :
+      fprintf(asFilOut, "INS     %3o  -%c\n", aiNew,
+        ((aiNew >= 32 && aiNew <= 127)?(char) aiNew:' '));
+        
+      if (liOprCur != aiOpr) {
+        liOprCur = aiOpr ;
+        giOutBytCtl+=2;
+      }
+      if (aiNew == ESC) giOutBytEsc++;
+      giOutBytDta++;
+      break;
+
+    case (DEL) :
+      fprintf(asFilOut, "DEL %d\n", aiLen);
+
+      liOprCur=DEL;
+      giOutBytCtl+=2+sizeof(aiLen);
+      giOutBytDel+=aiLen;
+      break;
+
+    case (BKT) :
+      fprintf(asFilOut, "BKT %d\n", aiLen);
+
+      liOprCur=BKT;
+      giOutBytCtl+=2+sizeof(aiLen);
+      giOutBytBkt+=aiLen;
+      break;
+
+    case (EQL) :
+      fprintf(asFilOut, "EQL %3o %3o %c-%c\n", aiOrg, aiNew, 
+        ((aiOrg >= 32 && aiOrg <= 127)?(char) aiOrg:' '),
+        ((aiNew >= 32 && aiNew <= 127)?(char) aiNew:' '));
+        
+      if (liOprCur != aiOpr) {
+        liOprCur = aiOpr ;
+        giOutBytCtl+=2;
+      }
+      if (aiNew == ESC) giOutBytEsc++;
+      giOutBytDta++;
+      break;
+  }
+}
+
+void ufOutBytRgn ( 
+  int   aiOpr, 
+  off_t aiLen,
+  int   aiOrg, 
+  int   aiNew,
+  Fab   *asFilOrg, 
+  Fab   *asFilNew,
+  FILE  *asFilOut,
+  off_t alPosOrg,
+  off_t alPosNew 
+)
+{ static int   liOprCur=ESC ;
+  static off_t liOprCnt ;
+  static off_t liEqlCnt = 0 ;
+
+  /* equal count pre-buffer */
+  switch (aiOpr)
+  { case (EQL) :
+      if (liEqlCnt < 4 && liOprCur != EQL)
+      { liEqlCnt ++ ;
+        return ;
+      }
+      break ;
+    case (MOD) :
+      break ;
+    default : 
+      if (liEqlCnt > 0)
+      { fprintf(asFilOut, "%8" PRIzd " %8" PRIzd " EQL %d\n", alPosOrg - liEqlCnt, alPosNew - liEqlCnt, liEqlCnt);
+        giOutBytCtl+=2;
+        giOutBytEql+=liEqlCnt;
+        liEqlCnt = 0;
+      }
+  }
+
+  /* write output when operation code changes */
+  if (aiOpr != liOprCur) {
+    switch (liOprCur) {
+      case (MOD) :
+        giOutBytCtl+=2;
+        giOutBytDta+=liOprCnt ;
+        fprintf(asFilOut, P8zd " " P8zd " MOD %d\n", alPosOrg - liOprCnt - liEqlCnt, alPosNew - liOprCnt - liEqlCnt, liOprCnt) ;
+        break;
+        
+      case (INS) :
+        giOutBytCtl+=2;
+        giOutBytDta+=liOprCnt ;
+        fprintf(asFilOut, "         " P8zd " INS %d\n", alPosNew - liOprCnt - liEqlCnt, liOprCnt) ;
+        break;
+  
+      case (DEL) :
+        giOutBytCtl+=2;
+        giOutBytDel+=liOprCnt;
+        fprintf(asFilOut, P8zd " " P8zd " DEL %d\n", alPosOrg - liOprCnt - liEqlCnt, alPosNew - liEqlCnt, liOprCnt);
+        break;
+  
+      case (BKT) :
+        giOutBytCtl+=2;
+        giOutBytBkt+=liOprCnt;
+        fprintf(asFilOut, P8zd " " P8zd " BKT %d\n", alPosOrg + liOprCnt - liEqlCnt, alPosNew - liEqlCnt, liOprCnt);
+        break;
+  
+      case (EQL) :
+        giOutBytCtl+=2;
+        giOutBytEql+=liOprCnt ;
+        fprintf(asFilOut, P8zd " " P8zd " EQL %d\n", alPosOrg - liOprCnt, alPosNew - liOprCnt, liOprCnt);
+        break;
+    }
+
+    liOprCur = aiOpr;
+    liOprCnt = 0;
+  }
+
+  /* accumulate operation codes */
+  switch (aiOpr) {
+    case(DEL):
+      liOprCnt += aiLen ;
+      break ;
+    case(BKT):
+      liOprCnt += aiLen ;
+      break ;
+    case(INS):
+      liOprCnt++ ;
+      if (aiNew == ESC) giOutBytEsc++;
+      break;
+    case(MOD):
+      if (liEqlCnt > 0)
+      { liOprCnt += liEqlCnt ;
+        liEqlCnt =  0 ;
+      } 
+      liOprCnt++ ;
+      if (aiNew == ESC) giOutBytEsc++;
+      break;
+    case(EQL): 
+      if (liEqlCnt > 0)
+      { liOprCnt += liEqlCnt ;
+        liEqlCnt =  0 ;
+      } 
+      liOprCnt++ ;
+      break;
+  }
+}
+
+/*******************************************************************************
+* Difference function
+*
+* Takes two files as arguments and writes out the differences
+*
+* Principle: 
+*   Take one byte from each file and compare. If they are equal, then continue.
+*   If they are different, start lookahead to find next equal blocks within file.
+*   If equal blocks are found, 
+*   - first insert or delete the specified number of bytes,
+*   - then continue reading on both files until equal blocks are reached,
+*
+*******************************************************************************/
+int jdiff ( Fab *asFilOrg, Fab *asFilNew, FILE *asFilOut )
+{ int liOrg ;           /* byte from original file */
+  int liNew ;           /* byte from new file */
+
+  off_t llPosOrg = 0 ;  /* read position on original file */
+  off_t llPosNew = 0 ;  /* read position on new file */
+
+  int   lbFnd=false;    /* offsets are pointing to a valid solution?*/
+  off_t liAhd=0;        /* number of bytes to go ahead after a find */
+  off_t liSkpOrg ;      /* number of bytes to skip in original file */ 
+  off_t liSkpNew ;      /* number of bytes to skip in new file */
+
+  /* Take one byte from each file ... */
+  liOrg = ufFabGet(asFilOrg, &llPosOrg, 0);
+  liNew = ufFabGet(asFilNew, &llPosNew, 0);
+  while (liNew > EOF) {
+    #if debug
+    if (gbDbg[DBGPRG]) 
+      fprintf(stddbg, "Input "P8zd"->%2x "P8zd"->%2x liAhd=%d.\n",
+        llPosOrg - 1, liOrg, llPosNew - 1, liNew, liAhd)  ;
+    #endif
+
+    if(liAhd > 0) {
+      /* 
+       * If equal blocks are found
+       * Continue reading on both files until equal blocks are reached
+       */
+      liAhd--;
+
+    } else {
+      /* 
+       * If lbFnd is set, we should now have reached an equal block.
+       * If not, this is a serious malfunction of the algorithm !!!
+       */
+      if (lbFnd) {
+        if (liOrg != liNew) {
+          if (lbFnd && (giVerbse>2 || gbCmpAll)) {
+            fprintf(stddbg, "Hash miss!\n");
+            giHshErr++ ;
+          }
+        }
+        lbFnd = false ;
+      }
+
+      /*
+       * Find the next equal block
+       */
+      if (liOrg != liNew) {
+        /* go back one byte */
+        if (liOrg > EOF) 
+          llPosOrg -- ;
+        llPosNew -- ;
+  
+        /* flush output when debugging */
+        #if debug
+        if (gbDbg[DBGMCH] || gbDbg[DBGAHD])
+          ufOut(ESC, 0, 0, 0, 0, 0, asFilOut, llPosOrg, llPosNew);
+        #endif
+  
+        /*
+         * If they are different, start lookahead to find next equal blocks within file.
+         */
+        lbFnd = ufFndAhd(asFilOrg, asFilNew, llPosOrg, llPosNew, &liSkpOrg, &liSkpNew, &liAhd) ;
+        #if debug
+        if (gbDbg[DBGAHD]) 
+          fprintf(stddbg, "Findahead on %d %d skip %d %d ahead %d\n", 
+            llPosOrg - 1, llPosNew - 1, liSkpOrg, liSkpNew, liAhd)  ;
+        if (gbDbg[DBGPRG]) 
+          fprintf(stddbg, "Current position in new file= %d\n", llPosNew) ;
+        #endif
+  
+        if (lbFnd) {
+          /*
+           * If equal blocks are found
+           * First insert, delete or backtrace the specified number of bytes
+           */
+          if (liSkpOrg > 0) {
+            ufOut(DEL, liSkpOrg, 0, 0, asFilOrg, asFilNew, asFilOut, llPosOrg + 1, llPosNew + 1) ;
+            llPosOrg += liSkpOrg ;
+            liOrg = ufFabGet(asFilOrg, &llPosOrg, 0);
+          } 
+          else if (liSkpOrg < 0) {
+            ufOut(BKT, - liSkpOrg, 0, 0, asFilOrg, asFilNew, asFilOut, llPosOrg + 1, llPosNew + 1) ;
+            llPosOrg += liSkpOrg ;
+            liOrg = ufFabGet(asFilOrg, &llPosOrg, 0);
+          }
+          else if (liOrg > EOF)
+            llPosOrg ++ ;
+  
+          llPosNew ++ ;
+          if (liSkpNew > 0) {
+            while (liSkpNew > 0) {
+              ufOut(INS, 1, 0, liNew, asFilOrg, asFilNew, asFilOut, llPosOrg, llPosNew);
+              liSkpNew-- ;
+              liNew = ufFabGet(asFilNew, &llPosNew, 0);
+            }
+          }
+        }
+        else {
+          if (giVerbse>1){
+            fprintf(stddbg, "No valid matches found at positions %d %d, skipping %d bytes.\n", llPosOrg, llPosNew, liAhd) ; 
+          }
+          if (liOrg > EOF) llPosOrg ++ ;
+          llPosNew ++ ;
+        } 
+      }
+    }
+
+    /*
+     * Output the result
+     */
+    if(liOrg == liNew) {
+      ufOut(EQL, 1, liOrg, liNew, asFilOrg, asFilNew, asFilOut, llPosOrg, llPosNew);
+    } else {
+      ufOut(MOD, 1, liOrg, liNew, asFilOrg, asFilNew, asFilOut, llPosOrg, llPosNew);
+    }
+
+    /* Take next byte from each file ... */
+    liOrg = ufFabGet(asFilOrg, &llPosOrg, 0) ;
+    liNew = ufFabGet(asFilNew, &llPosNew, 0) ;
+  }
+  ufOut(ESC, 0, 0, 0, 0, 0, asFilOut, llPosOrg, llPosNew);
+  return (1);
+}
+
+/*******************************************************************************
+* Main function
+*******************************************************************************/
+int main(int aiArgCnt, char *acArg[])
+{
+  char *lcFilNamFrt;
+  char *lcFilNamScd;
+  char *lcFilNamOut;
+
+  Fab lsFilFrt;
+  Fab lsFilScd;
+  FILE  *lpFilOut;
+
+  int liOptArgCnt=0 ;
+  int lbOptArgDne=false ;
+  char lcHlp='\0';
+
+  int liHshLodMaxPrc;
+  int liHshLodAvgPrc;
+  int liHshSmpRtePrc;
+
+  /* Default settings */
+  ufOut    = &ufOutBytBin;
+  stddbg   = stderr ;
+
+  gbCmpAll = true ;
+  giBufSze = 4096 * 1024 ;
+  gbSrcBkt = true;
+  giSrcScn = 1 ;
+  giMchMin = 8 ;
+  giMchMax = 64 ;
+  giHshIdx = 13 ; /* 262139 samples */
+  giHshPme = giPme[giHshIdx] ;
+
+  /* Read options */
+  while (! lbOptArgDne && (aiArgCnt-1 > liOptArgCnt)) {
+    liOptArgCnt++ ;
+    if (strcmp(acArg[liOptArgCnt], "-v") == 0) {
+      giVerbse = 1; 
+    } else if (strcmp(acArg[liOptArgCnt], "-vv") == 0) {
+      giVerbse = 2;
+    } else if (strcmp(acArg[liOptArgCnt], "-vvv") == 0) {
+      giVerbse = 3;
+    } else if (strcmp(acArg[liOptArgCnt], "-h") == 0) {
+      lcHlp = 'h' ;
+
+    } else if (strcmp(acArg[liOptArgCnt], "-m") == 0) {
+        liOptArgCnt ++;
+        if (aiArgCnt > liOptArgCnt) { 
+          giBufSze = atoi(acArg[liOptArgCnt]) / 2 ;
+          if (giBufSze <  64)        giBufSze =  64 ;
+          if (giBufSze > 256 * 1024) giBufSze = 256 * 1024 ;
+          giBufSze = giBufSze * 1024 ;
+        }
+    } else if (strcmp(acArg[liOptArgCnt], "-s") == 0) {
+        liOptArgCnt++;
+        if (aiArgCnt > liOptArgCnt) { 
+          giHshPme = atoi(acArg[liOptArgCnt]) ;
+          for (giHshIdx=0; giHshIdx < 23 && giPme[giHshIdx] > giHshPme; giHshIdx++) ;
+          giHshPme = giPme[giHshIdx] ;
+        }
+
+    } else if (strcmp(acArg[liOptArgCnt], "-l") == 0) {
+        ufOut = &ufOutBytAsc;
+    } else if (strcmp(acArg[liOptArgCnt], "-lr") == 0) {
+        ufOut = &ufOutBytRgn;
+    } else if (strcmp(acArg[liOptArgCnt], "-b") == 0) {
+        // Larger hashtables
+        gbCmpAll = true ;
+        giBufSze = 4096 * 1024 ;
+        gbSrcBkt = true;
+        giSrcScn = 1 ;
+        giMchMin = 8 ;
+        giMchMax = 64 ;
+        giHshIdx = 9 ; // 4M x 4b x 2 = 32MB Hashtable
+        giHshPme = giPme[giHshIdx] ;
+    } else if (strcmp(acArg[liOptArgCnt], "-f") == 0) {
+        // No compare out-of-buffer
+        gbCmpAll = false ;
+        giBufSze = 64 * 1024 ;
+        gbSrcBkt = true ;
+        giSrcScn = 1  ;
+        giMchMin = 8 ;
+        giMchMax = 16 ;
+        giHshIdx = 13 ; // 256k x 4b x 2 Hashtable
+        giHshPme = giPme[giHshIdx] ;
+    } else if (strcmp(acArg[liOptArgCnt], "-ff") == 0) {
+        // No compare out-of-buffer and no backtracing
+        gbCmpAll = false ;
+        giBufSze = 64 * 1024 ;
+        gbSrcBkt = false ;
+        giSrcScn = 0 ;
+        giMchMin = 8 ;
+        giMchMax = 16 ;
+        giHshIdx = 13 ; // 256k x 4b x 2 Hashtable
+        giHshPme = giPme[giHshIdx] ;
+    } else if (strcmp(acArg[liOptArgCnt], "-e") == 0) {
+        liOptArgCnt ++;
+        if (aiArgCnt > liOptArgCnt) {
+          giEqlThr = atoi(acArg[liOptArgCnt]) ;
+        }
+
+    #if debug
+    } else if (strcmp(acArg[liOptArgCnt], "-do") == 0) {
+      stddbg = stdout;
+    } else if (strcmp(acArg[liOptArgCnt], "-dhsh") == 0) {
+      gbDbg[DBGHSH] = true ;
+    } else if (strcmp(acArg[liOptArgCnt], "-dahd") == 0) {
+      gbDbg[DBGAHD] = true ;
+    } else if (strcmp(acArg[liOptArgCnt], "-dcmp") == 0) {
+      gbDbg[DBGCMP] = true ;
+    } else if (strcmp(acArg[liOptArgCnt], "-dprg") == 0) {
+      gbDbg[DBGPRG] = true ;
+    } else if (strcmp(acArg[liOptArgCnt], "-dbuf") == 0) {
+      gbDbg[DBGBUF] = true ;
+    } else if (strcmp(acArg[liOptArgCnt], "-dhsk") == 0) {
+      gbDbg[DBGHSK] = true ;
+    } else if (strcmp(acArg[liOptArgCnt], "-dahh") == 0) {
+      gbDbg[DBGAHH] = true ;
+    } else if (strcmp(acArg[liOptArgCnt], "-dbkt") == 0) {
+      gbDbg[DBGBKT] = true ;
+    } else if (strcmp(acArg[liOptArgCnt], "-dred") == 0) {
+      gbDbg[DBGRED] = true ;
+    } else if (strcmp(acArg[liOptArgCnt], "-dmch") == 0) {
+      gbDbg[DBGMCH] = true ;
+    #endif
+
+    } else {
+      lbOptArgDne = true ;
+      liOptArgCnt-- ;
+    }
+  }
+
+  /* Output greetings */  
+  if ((giVerbse>0) || (lcHlp == 'h') || (aiArgCnt - liOptArgCnt < 3)) {
+    fprintf(stddbg, "JDIFF - Jojo's binary diff 0.6 (Beta) September 2003\n") ;
+    fprintf(stddbg, "Copyright (C) 2002 Joris Heirbaut (joheirba@tijd.com)\n");
+    fprintf(stddbg, "\n") ;
+    fprintf(stddbg, "This program is free software. Terms of the GNU General Public License apply.\n") ;
+    fprintf(stddbg, "\n") ;
+    fprintf(stddbg, "This program is distributed WITHOUT ANY WARRANTY, without even the implied\n");
+    fprintf(stddbg, "warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
+    fprintf(stddbg, "See the GNU General Public License for more details.\n") ;
+    fprintf(stddbg, "\n");
+    fprintf(stddbg, "File adressing is %d bit.\n", sizeof(off_t) * 8) ;
+  }
+
+  if ((aiArgCnt - liOptArgCnt < 3) || (lcHlp == 'h')) { 
+    fprintf(stddbg, "Usage: jdiff [options] <original file> <new file> [<output file>]\n") ;
+    fprintf(stddbg, "  -v          Verbose (greeting, results and tips).\n");
+    fprintf(stddbg, "  -vv         Verbose (debug info).\n");
+    fprintf(stddbg, "  -h          Help (this text).\n");
+    fprintf(stddbg, "  -l          Listing (ascii output).\n");
+    fprintf(stddbg, "  -lr         Regions (ascii output).\n");
+    fprintf(stddbg, "  -b          Better: copy/insert, larger hashtable.\n");
+    fprintf(stddbg, "  -f          Fast:   copy/insert but no out of buffer compares.\n");
+    fprintf(stddbg, "  -ff         Faster: insert/delete and no out of buffer compares.\n");
+    fprintf(stddbg, "  -m size     Size (in kB) for look-ahead buffers (default 128).\n");
+    fprintf(stddbg, "  -s size     Number of samples per file (default 32749).\n");
+    fprintf(stddbg, "Principles:\n");
+    fprintf(stddbg, "  JDIFF tries to find equal regions between two binary files using a heuristic\n");
+    fprintf(stddbg, "  hash algorithm and outputs the differences between both files.\n");
+    fprintf(stddbg, "  Heuristics are generally used for improving performance and memory usage,\n");
+    fprintf(stddbg, "  at the cost of accuracy. Therefore, this program may not find a minimal set\n");
+    fprintf(stddbg, "  of differences between files.\n");
+    fprintf(stddbg, "Notes:\n");
+    fprintf(stddbg, "  Options -m and -s should be used after -b, -f or -ff.\n");
+    fprintf(stddbg, "  Accuracy may be improved by increasing the number of samples.\n");
+    fprintf(stddbg, "  Speed may be increased with option -f or -ff (lower accuracy).\n");
+    fprintf(stddbg, "  Sample size is always lowered to the largest n-bit prime (n < 32)\n");
+    fprintf(stddbg, "  Original and new file must be random access files.\n");
+    fprintf(stddbg, "  Output is sent to standard output if output file is missing.\n");
+    fprintf(stddbg, "\n");
+    fprintf(stddbg, "  JDIFF uses file buffers to minimize (slower) random accesses in files.\n");
+                     /******************************************************************************/
+    exit(2);
+  }
+
+  /* Read filenames */
+  lcFilNamFrt = acArg[1 + liOptArgCnt];
+  lcFilNamScd = acArg[2 + liOptArgCnt];
+  if (aiArgCnt - liOptArgCnt >= 4) 
+    lcFilNamOut = acArg[3 + liOptArgCnt];
+  else 
+    lcFilNamOut = "-" ;
+
+  /* Initialize */
+  ufHshIni();
+
+  /* Output settings */
+  if (giVerbse>1) {
+    fprintf(stddbg, "Lookahead buffers: %d kb. (%d kb. per file).\n", giBufSze * 2 / 1024, giBufSze / 1024) ;
+    fprintf(stddbg, "Hastable size    : %d kb. (%d samples).\n", (giHshSze + 512) / 1024, giHshPme) ;
+  }
+  if (giVerbse>2) {
+    fprintf(stddbg, "Equal Threshold  : %d.\n", giEqlThr) ;
+  }
+
+  /* Open files */
+  if ( ! ufFabOpn(&lsFilFrt, lcFilNamFrt, "Org") )
+  { fprintf(stddbg, "Could not open first file for reading.\n") ;
+    exit(3);
+  }
+  if ( ! ufFabOpn(&lsFilScd, lcFilNamScd, "New") )
+  { fprintf(stddbg, "Could not open second file for reading.\n") ;
+    ufFabCls(&lsFilFrt);
+    exit(4);
+  }
+
+  if (strcmp(lcFilNamOut,"-") == 0 ) 
+    lpFilOut = stdout ;
+  else 
+    lpFilOut = fopen(lcFilNamOut, "wb") ;
+  if ( lpFilOut == NULL ) {
+    fprintf(stddbg, "Could not open output file for writing.\n") ;
+    ufFabCls(&lsFilFrt) ;
+    ufFabCls(&lsFilScd) ;
+    exit(5);
+  }
+
+  /* Go ... */
+  jdiff(&lsFilFrt, &lsFilScd, lpFilOut);
+
+  /* Terminate */
+  ufFabCls(&lsFilFrt);
+  ufFabCls(&lsFilScd);
+
+  /* Write statistics */
+  #if debug
+  if (gbDbg[DBGHSH]) ufHshPnt() ;
+  #endif
+  if (giVerbse > 0) {
+    if (giHshEls + giHshCol == 0)
+      liHshSmpRtePrc = -1 ;
+    else
+      liHshSmpRtePrc = giHshEls * 100 / (giHshEls + giHshCol) ;
+  }
+  if (giVerbse > 1) {
+    fprintf(stddbg, "Hashtable hits          = %d\n",   giHshHit) ;
+    fprintf(stddbg, "Hashtable errors        = %d\n",   giHshErr) ;
+    fprintf(stddbg, "Hashtable repairs       = %d\n",   giHshRpr) ;
+    fprintf(stddbg, "Hashtable collisions    = %d\n",   giHshCol) ;
+    fprintf(stddbg, "Hashtable overrides     = %d\n",   giHshColSeqCnt) ;
+    fprintf(stddbg, "Samples (rate, load)    = %d (%d%%, %d%%)\n", giHshEls, liHshSmpRtePrc, giHshEls * 100 / giHshPme) ;
+    fprintf(stddbg, "Random accesses         = %d\n", giFabSek);
+    fprintf(stddbg, "Delete    bytes         = %d\n", giOutBytDel);
+    fprintf(stddbg, "Backtrack bytes         = %d\n", giOutBytBkt);
+    fprintf(stddbg, "Escape    bytes written = %d\n", giOutBytEsc);
+    fprintf(stddbg, "Control   bytes written = %d\n", giOutBytCtl);
+  }
+  if (giVerbse > 0) {
+    fprintf(stddbg, "Equal     bytes         = %d\n", giOutBytEql);
+    fprintf(stddbg, "Data      bytes written = %d\n", giOutBytDta);
+    fprintf(stddbg, "Overhead  bytes written = %d\n", giOutBytCtl + giOutBytEsc);
+    
+    /* Samplerate is low when below 5% */
+    if ((giHshIdx > 8) && (liHshSmpRtePrc < 5) && (liHshSmpRtePrc != -1)) {
+      fprintf(stddbg, "Tip: Sample rate is low. You may want to increase the size of the hashtable\n");
+      fprintf(stddbg, "     with option -s %d for improved accuracy.\n", giPme[giHshIdx - 1]);
+
+    } else if ((giHshIdx < 20) && (liHshSmpRtePrc > 66)) {
+      fprintf(stddbg, "Tip: Sample rate is high. You may want to decrease the size of the hashtable\n");
+      fprintf(stddbg, "     with option -s %d for improved performance.\n", giPme[giHshIdx + 1]);
+    }
+
+    /* Random accesses are high when more than one seek per 64k of data */
+    if ((giFabSek > (int) (giOutBytDta + giOutBytEql) / (64 * 1024)) && (giFabSek > 10)) {
+      fprintf(stddbg, "Tip: Random accesses are high. You may want to increase the size of the \n");
+      fprintf(stddbg, "     lookahead buffers using option -m for improved performance.\n");
+    } else if ((giFabSek < (int) (giOutBytDta + giOutBytEql) / (256*1024*1024)) && (giBufSze > 64*1024)) {
+      fprintf(stddbg, "Tip: Random accesses are rare. You may want to decrease the size of the \n");
+      fprintf(stddbg, "     lookahead buffers using option -m.\n");
+    }
+
+    if (giHshErr > 1 && giHshErr > (int) (giOutBytDta + giOutBytEql) / 4 / 1024 / 1024) {
+      fprintf(stddbg, "Tip: number of hash errors is high. Do not use option -ff.\n");
+    }
+  }
+
+  if (giOutBytDta == 0 && giOutBytDel == 0)
+    exit(1);    /* no differences found */
+  else
+    exit(0);    /* differences found    */
+}
