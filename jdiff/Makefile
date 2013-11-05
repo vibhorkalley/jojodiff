@@ -1,5 +1,5 @@
 CC=g++
-CFLAGS=-O3 -c -Wall -g
+CFLAGS=-O3 -c -Wall -g -funroll-loops
 LDFLAGS=-O2 -lm
 INCLUDE=-Iinclude
 
