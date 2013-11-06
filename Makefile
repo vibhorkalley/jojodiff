@@ -11,12 +11,12 @@ DIFF_EXE=jdiff
 PTCH_EXE=jptch
 
 all:	$(DIFF_EXE) $(PTCH_EXE)
+debug:	all
 full:	clean all
 
 CPP=g++
-WARNINGS=-Wall -Wno-cpp -Wno-format
+WARNINGS=-Wno-cpp -Wno-format -Wall
 INCLUDE=-Iheaders
-DEBUG=-g -D_DEBUG
 
 CFLAGS=-O3 -c -funroll-loops
 CFLAGS+=$(WARNINGS)
@@ -25,6 +25,7 @@ CFLAGS+=-D_FILE_OFFSET_BITS=64 -U_LARGEFILE64_SOURCE
 LDFLAGS=-O2
 LDFLAGS+=$(WARNINGS)
 
+debug:DEBUG=-g -D_DEBUG
 
 $(DIFF_EXE): $(OBJECTS)
 	$(CPP) $(INCLUDE) $(LDFLAGS) $(DEBUG) $(OBJECTS) $(JDIFF_MAIN) -o $@
