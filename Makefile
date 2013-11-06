@@ -1,34 +1,50 @@
 #
 # Makefile
 #
-.DEFAULT: all
-
 JDIFF_MAIN=src/main.cpp
 JPATCH_MAIN=src/jpatch.cpp
 SOURCES=$(patsubst src/%, %, $(wildcard src/J*.cpp ))
 OBJECTS=$(addprefix bin/, $(addsuffix .o, $(basename ${SOURCES})))
 
-all: 		jdiff jptch
-full:		clean all
+SHELL := /bin/bash
+DIFF_EXE=jdiff
+PTCH_EXE=jptch
+
+all:	$(DIFF_EXE) $(PTCH_EXE)
+full:	clean all
 
 CPP=g++
-CFLAGS=-O3 -c -funroll-loops #-Wall
-LDFLAGS=-O2
-DEBUG=-g -D_DEBUG
+WARNINGS=-Wall -Wno-cpp -Wno-format
 INCLUDE=-Iheaders
-NATIVE=-march=native
+DEBUG=-g -D_DEBUG
 
-#all:CFLAGS+=-D_FILE_OFFSET_BITS=64 -U_LARGEFILE64_SOURCE
+CFLAGS=-O3 -c -funroll-loops
+CFLAGS+=$(WARNINGS)
+CFLAGS+=-D_FILE_OFFSET_BITS=64 -U_LARGEFILE64_SOURCE
 
-jdiff: $(OBJECTS)
-	$(CPP) $(INCLUDE) $(LDFLAGS) $(DEBUG) $(OBJECTS) -o jdiff $(JDIFF_MAIN)
+LDFLAGS=-O2
+LDFLAGS+=$(WARNINGS)
 
-jptch: $(JPATCH_MAIN)
-	$(CPP) $(INCLUDE) $(LDFLAGS) $(DEBUG) -o jptch $(JPATCH_MAIN)
+
+$(DIFF_EXE): $(OBJECTS)
+	$(CPP) $(INCLUDE) $(LDFLAGS) $(DEBUG) $(OBJECTS) $(JDIFF_MAIN) -o $@
+
+$(PTCH_EXE): $(JPATCH_MAIN)
+	$(CPP) $(INCLUDE) $(LDFLAGS) $(DEBUG) $(JPATCH_MAIN) -o $@
 
 bin/%.o: src/%.cpp
-	$(CPP) $(CFLAGS) $(INCLUDE) $(DEBUG) -o bin/$*.o src/$*.cpp
+	$(CPP) $(INCLUDE) $(CFLAGS) $(DEBUG) -o bin/$*.o src/$*.cpp
+
+# for generate test file: make gentest SIZE=100
+gentest:
+	dd if=/dev/urandom of=tests/$(SIZE)MB bs=1MB count=$(SIZE)
+
+# for running a test: make runtest TEST=path/to/testfile
+runtest:
+	time ./$(DIFF_EXE) $(TEST) $(TEST) &> /dev/null
 
 clean:
-	rm -f jdiff jptch jdifd jptcd  $(OBJECTS)
+	rm -f $(DIFF_EXE) $(PTCH_EXE) $(OBJECTS)
 
+.DEFAULT:	all
+.PHONY:		clean
