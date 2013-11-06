@@ -1,3 +1,5 @@
 *.o
-jdiff/jdiff
-jdiff/tests/*MB
+*.swp
+jdiff
+jptch
+tests/*MB

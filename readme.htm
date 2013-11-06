@@ -1,0 +1,192 @@
+<HTML>
+<HEAD>
+<META HTTP-EQUIV="CONTENT-TYPE" CONTENT="text/html; charset=iso-8859-1">
+<meta name="description" content="JojoDiff is a program that outputs the differences between two binary files using a fast, heuristic algorithm.">
+<meta name="keywords" content="diff, jdiff, binarydiff, binary diff, binary difference, difference between two binary files, heuristic algorithm">
+<TITLE>JojoDiff - diff utility for binary files</TITLE>
+<BODY>
+
+<center>
+<H1>JojoDiff - diff utility for binary files</H1>
+<font size="-1">
+Copyright &copy; 2002-2011 Joris Heirbaut<br>
+</font>
+This software is hosted by:</br>
+<a href="http://sourceforge.net">
+<IMG src="http://sourceforge.net/sflogo.php?group_id=56897&amp;type=5" width="210" height="62" border="0" alt="SourceForge Logo">
+</a>
+</p>
+</center>
+
+<H2>1. Purpose</H2>
+<ul>
+    <b>JDIFF </b> is a program that outputs the differences between two (binary) files.</br>
+    <b>JPTCH</b> can then be used to reconstruct the second file from the first file.</br>
+    For example:
+    <ul>
+    <li><b>jdiff</b> archive0000.tar archive0001.tar archive0001.jdf
+    <li><b>jptch</b> archive0000.tar archive0001.jdf archive0001b.tar</br>
+    </ul>
+    will create a file archive0001b.tar which is identical to archive0001.tar.
+</p>
+    Possible applications include:
+    <ul>
+    <li> incremental backups,</br>
+    <li> synchronising files between two computers over a slow network (see <b>JSYNC</b>).
+    </ul>
+</p>
+    <b>JDIFF</b> tries to find a minimal set of differences between two files using
+    a heuristic algorithm with constant space and linear time complexity.
+    This means that accuracy is traded over speed.
+    <b>JDIFF</b> will therefore, in general, not always find the smallest set of differences, but will try to
+    be fast and will use a fixed amount of memory.
+</p>
+    JDIFF does not compress the generated patchfile. It is recommended to do so with any compression tool you like.
+    See below for an example using ZIP.
+</p>
+    Download these utilities from the <a href="http://sourceforge.net/projects/jojodiff/">Jojo's Binary Diff Download Page</a>.
+</p>
+</ul>
+
+<H2>2. Version and history</H2>
+<ul>
+    The current version of this utility is bèta 0.8 dating from September 2011.
+    The modification history is as follows:
+    <ul><table>
+    <tr><td width=10%> v0.1  </td><td width=25%> June 2002      </td><td> Insert/delete algorithm. </td></tr>
+    <tr><td> v0.2a </td><td> June 2002      </td><td> Optimized patch files. </td></tr>
+    <tr><td> v0.2b </td><td> July 2002      </td><td> Bugfix on code-length of 252. </td></tr>
+    <tr><td> v0.2c </td><td> July 2002      </td><td> Bugfix on divide-by-zero in verbose mode. </td></tr>
+    <tr><td> v0.3a </td><td> July 2002      </td><td> Copy/insert algorithm. </td></tr>
+    <tr><td> v0.4a </td><td> September 2002 </td><td> Select "best" of multiple matches. </td></tr>
+    <tr><td> v0.4b </td><td> October 2002   </td><td> Optimize matches. </td></tr>
+    <tr><td> v0.4c </td><td> January 2003   </td><td> Rewrote selection algorithm between multiple matches.</td></tr>
+    <tr><td> v0.6  </td><td> April 2005     </td><td> Support files larger than 2GB.</td></tr>
+    <tr><td> v0.7  </td><td> November 2009  </td><td> Optimizations for files larger than 2GB.</td></tr>
+    <tr><td> v0.8  </td><td> September 2011 </td><td> Conversion to C++ classes that should be easier to reuse.</td></tr>
+    </table></ul>
+</p>
+
+</ul>
+
+<H2>3. Installation</H2>
+<ul>
+    On Windows systems:
+    <ul>
+    <li> Compiled executables are within the "win32" directory. You can run them
+    from a command prompt.
+    </ul>
+</p>
+    On GCC/Linux systems:
+    <ul>
+    <li> Compiled ELF binaries are within the "linux" directory.
+    <li> You may also compile the source by running "make" within the "src" directory.
+    <li> Copy the resulting binaries to your /usr/local/bin.
+    <li> Within the bash directory, you can find an example BASH script, <b>JSYNC</b>,
+         which I use for synchronizing files between two computers connected
+         over a slow network.
+    </ul>
+</p>
+</ul>
+
+<H2>4. Usage</H2>
+
+    <b>jdiff</b> [options] original_file new_file [output_file]
+    <ul>
+    <b>Options:</b>
+        <ul>
+        <table>
+        <tr><td> -v   </td><td> Verbose (greeting, results and tips).  </td></tr>
+        <tr><td> -vv  </td><td> Verbose (debug info).</td></tr>
+        <tr><td> -h   </td><td> Help (this text).</td></tr>
+        <tr><td> -l   </td><td> List byte by byte (ascii output).</td></tr>
+        <tr><td> -lr  </td><td> List groups of bytes (ascii output).</td></tr>
+        <tr><td> -b       </td><td>   Try to be better (using more memory).        </td></tr>
+        <tr><td> -f       </td><td>   Try to be faster: using less memory, no out of buffer compares.</td></tr>
+        <tr><td> -ff      </td><td>   Try to be faster: no out of buffer compares, no prescanning. </td></tr>
+        <tr><td> -m size  </td><td>   Size (in kB) for look-ahead buffers (default 128).   </td></tr>
+        <tr><td> -bs size </td><td>   Block size (in bytes) for reading from files (default 4096). </td></tr>
+        <tr><td> -s size  </td><td>   Number of samples in mega (default 8 mega samples). </td></tr>
+        </table>
+        </ul>
+    <b>Principles:</b>
+        <ul>
+        <b>JDIFF</b> tries to find equal regions between two binary files using a heuristic
+        hash algorithm and outputs the differences between both files.
+        Heuristics are generally used for improving performance and memory usage,
+        at the cost of accuracy. Therefore, this program may not find a minimal set
+        of differences between files.</br>
+        </ul>
+    <b>Notes:</b>
+        <ul>
+	<li>  Options -m and -s should be used after -b, -f or -ff.
+        <li>  Accuracy may be improved by increasing the number of samples.
+        <li>  Speed may be increased with option -f or -ff (lower accuracy).
+        <li>  Sample size is always lowered to the largest n-bit prime (n < 32)
+        <li>  Original and new files must be random access files.
+        <li>  Output is sent to standard output if output file is missing.</li>
+        </ul>
+    <b>Important:</b>
+        <ul>
+        Do not use jdiff directly on compressed files, such as zip, gzip, rar,
+        because compression programs tend to increase the difference between files !
+        Instead use jdiff on uncompressed archives, such as tar, cpio or zip -0,
+        and then compress the files afterwards, including the jdiff patch file.
+        Afterwards, do not forget to uncompress the files before using jpatch.
+    For example:
+    <table>
+    <tr><td><b>zip</b> -0 archive0000.zip mydir/*                        </td><td> put mydir in an archive </td></tr>
+    <tr><td><b>zip</b> -0 archive0001.zip mydir/*                        </td><td> some time later </td></tr>
+    <tr><td><b>jdiff</b> archive0000.zip archive0001.zip archive0001.jdf </td><td> difference between archives </td></tr>
+    <tr><td><b>zip</b> -9 archive0001.jdf.zip                            </td><td> send compressed difference file to a friend </td></tr>
+    <tr><td><b>zip</b> -9 archive0000.zip.zip archive0000.zip            </td><td> compress the archive before sending to a friend </td></tr>
+    <tr><td><b>...</td><td>  </td></tr>
+    <tr><td><b>unzip</b> archive0000.zip.zip                             </td><td> restore uncompressed zip file</td></tr>
+    <tr><td><b>unzip</b> archive0000.jdf.zip                             </td><td> restore uncompressed jdf file</td></tr>
+    <tr><td><b>jpatch</b> archive0000.zip archive0001.jdf archive0001b.zip</td><td> recreate archive001.zip</td></tr>
+    <tr><td><b>unzip</b> archive0001b.zip</td><td> restore mydir</td></tr>
+    </table>
+    You may also replace zip -0 by tar and zip -9 by gzip, or any other archiving and/or compression utility you like.
+    </ul>
+</ul>
+</p>
+    <b>jpatch</b> [options] original_file patch_file [output_file]
+    <ul>
+    <b>Options:</b>
+        <ul>
+        <table>
+        <tr><td width="20%">
+                  -v    </td><td>  Verbose (greeting, results and tips). </td></tr>
+        <tr><td>  -vv   </td><td>  Verbose (debug info). </td></tr>
+        <tr><td>  -vvv  </td><td>  Verbose (more debug info). </td></tr>
+        <tr><td>  -h    </td><td>  Help (this text). </td></tr>
+        </table>
+        </ul>
+    <b>Principles:</b>
+        <ul>
+        <b>JPATCH</b> reapplies a diff file, generated by jdiff, to the original file,
+        restoring the new file.
+        </ul>
+    </ul>
+</p>
+
+<H2>5. Contacts and remarks</H2>
+
+<ul>
+    <table>
+    <tr><td> Author:  </td><td> Joris Heirbaut         </td></tr>
+    <tr><td> Contact me via <a href=http://sourceforge.net/projects/jojodiff>sourceforge</a>      </td></tr>
+    </table>
+</p>
+    If you like this program, please let me know !
+    If you reuse the source code for your personal (open source)
+    applications, it would be great to let me know too.
+</p>
+
+<H2>6. Acknowledgements</H2>
+
+    Earlier versions of this software have been developed within the Cygwin/GNU environment.
+    More recently, development has been done in Eclipse/CDT using GCC and MinGW/GCC.
+
+</BODY>
+</HTML>
