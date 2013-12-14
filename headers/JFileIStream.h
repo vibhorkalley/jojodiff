@@ -38,7 +38,7 @@ public:
     /**
      * Construct an unbuffered JFile on an istream.
      */
-	JFileIStream(istream * apFil, const char *asFid);
+	JFileIStream(char *apFil, const char *asFid);
 
 	/**
 	 * Destroy the JFile.
@@ -60,7 +60,7 @@ public:
 
 private:
 	/* Context */
-    istream *mpStream;      /* file handle                                  */
+    char *mpStream;      /* file handle                                  */
     const char *msFid;      /* file id (for debugging)                      */
 
     /* State */

@@ -430,9 +430,6 @@ int main(int aiArgCnt, char *acArg[])
   int fileOrgSize = fileOrgStatus.st_size;
   int fileNewSize = fileNewStatus.st_size;
 
-  std::cout << fileOrgSize << "\n";
-  std::cout << fileNewSize << "\n";
-
   paramNew.size = fileNewSize;
   paramOrg.size = fileOrgSize;
 
@@ -463,13 +460,6 @@ int main(int aiArgCnt, char *acArg[])
 		return -1;
 	}
 
-  std::cout << paramNew.dest << "\n";
-  std::cout << paramOrg.dest << "\n";
-
-  liFilOrg->close();
-  liFilNew->close();
-
-  return 72;
   /* Open first file */
 #ifdef __MINGW32__
   lfFilOrg = jfopen(lcFilNamOrg, "rb") ;
@@ -483,7 +473,7 @@ int main(int aiArgCnt, char *acArg[])
 	  if (llBufSze > 0){
 		  lpFilOrg = new JFileIStreamAhead(liFilOrg, "Org",  llBufSze, liBlkSze);
 	  } else {
-		  lpFilOrg = new JFileIStream(liFilOrg, "Org");
+		  lpFilOrg = new JFileIStream(paramOrg.dest, "Org");
 	  }
   }
 #endif
@@ -505,7 +495,7 @@ int main(int aiArgCnt, char *acArg[])
 	  if (llBufSze > 0){
 		  lpFilNew = new JFileIStreamAhead(liFilNew, "New",  llBufSze, liBlkSze);
 	  } else {
-		  lpFilNew = new JFileIStream(liFilNew, "New");
+		  lpFilNew = new JFileIStream(paramNew.dest, "New");
 	  }
   }
 #endif

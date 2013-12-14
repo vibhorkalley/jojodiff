@@ -26,7 +26,7 @@
 #include "JDebug.h"
 
 namespace JojoDiff {
-JFileIStream::JFileIStream(istream * apFil, const char *asFid) :
+JFileIStream::JFileIStream(char *apFil, const char *asFid) :
     mpStream(apFil), msFid(asFid), mzPosInp(0), mlFabSek(0)
 {
 }
@@ -46,14 +46,14 @@ int JFileIStream:: get (
     const off_t &azPos,    	/* position to read from                */
     const int aiTyp     /* 0=read, 1=hard ahead, 2=soft ahead   */
 ) {
-    if (azPos != mzPosInp){
-        mlFabSek++;
-        if (mpStream->eof())
-            mpStream->clear();
-        mpStream->seekg(azPos, std::ios::beg); // may throw an exception
-    }
-    mzPosInp = azPos + 1;
-    return mpStream->get();
+    //if (azPos != mzPosInp){
+    //    mlFabSek++;
+    //    if (mpStream->eof())
+    //        mpStream->clear();
+    //    mpStream->seekg(azPos, std::ios::beg); // may throw an exception
+    // }
+    //mzPosInp = azPos + 1;
+    return 1;
 } /* function get */
 } /* namespace JojoDiff */
 
