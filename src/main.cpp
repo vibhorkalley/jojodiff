@@ -134,6 +134,10 @@ using namespace std ;
 #include <iostream>
 #include <istream>
 #include <fstream>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <pthread.h>
 #include "JFileIStream.h"
 #include "JFileIStreamAhead.h"
 #endif
@@ -146,6 +150,21 @@ using namespace std ;
 #include "JFile.h"
 
 using namespace JojoDiff ;
+
+typedef struct param_t {
+	istream *fileHandler;
+	char *dest;
+  size_t size;
+} param;
+
+void *fillBuffer(void *in)
+{
+  param *p = (param *)in;
+
+  p->fileHandler->read(p->dest, p->size - 1);
+
+  return NULL;
+}
 
 /*******************************************************************************
 * Main function
@@ -388,6 +407,69 @@ int main(int aiArgCnt, char *acArg[])
   ifstream *liFilNew = NULL ;
 #endif
 
+  // Get New,Org file size
+  struct stat fileOrgStatus, fileNewStatus;
+  pthread_t threadNew, threadOrg;
+  int rc;
+
+  liFilOrg = new ifstream();
+  liFilNew = new ifstream();
+
+  // Open files
+  liFilOrg->open(lcFilNamOrg, ios_base::in | ios_base::binary) ;
+  liFilNew->open(lcFilNamNew, ios_base::in | ios_base::binary) ;
+
+  param paramNew, paramOrg;
+
+  paramNew.fileHandler = liFilNew;
+  paramOrg.fileHandler = liFilOrg;
+
+  stat(lcFilNamOrg, &fileOrgStatus );
+  stat(lcFilNamNew, &fileNewStatus );
+
+  int fileOrgSize = fileOrgStatus.st_size;
+  int fileNewSize = fileNewStatus.st_size;
+
+  std::cout << fileOrgSize << "\n";
+  std::cout << fileNewSize << "\n";
+
+  paramNew.size = fileNewSize;
+  paramOrg.size = fileOrgSize;
+
+  paramNew.dest = new char[fileNewSize];
+  paramOrg.dest = new char[fileOrgSize];
+
+  rc = pthread_create(&threadNew, NULL, fillBuffer, (void *)(&paramNew));
+	if(rc) {
+		fprintf(stderr, "error creating threads\n");
+		return -1;
+	}
+
+  rc = pthread_create(&threadOrg, NULL, fillBuffer, (void *)(&paramOrg));
+	if(rc) {
+		fprintf(stderr, "error creating threads\n");
+		return -1;
+	}
+
+  rc = pthread_join(threadNew, NULL);
+  if(rc) {
+		fprintf(stderr, "error joining threads\n");
+		return -1;
+	}
+
+  rc = pthread_join(threadOrg, NULL);
+  if(rc) {
+		fprintf(stderr, "error joining threads\n");
+		return -1;
+	}
+
+  std::cout << paramNew.dest << "\n";
+  std::cout << paramOrg.dest << "\n";
+
+  liFilOrg->close();
+  liFilNew->close();
+
+  return 72;
   /* Open first file */
 #ifdef __MINGW32__
   lfFilOrg = jfopen(lcFilNamOrg, "rb") ;
@@ -395,8 +477,8 @@ int main(int aiArgCnt, char *acArg[])
       lpFilOrg = new JFileAhead(lfFilOrg, "Org", llBufSze, liBlkSze);
   }
 #else
-  liFilOrg = new ifstream();
-  liFilOrg->open(lcFilNamOrg, ios_base::in | ios_base::binary) ;
+  //liFilOrg = new ifstream();
+  //liFilOrg->open(lcFilNamOrg, ios_base::in | ios_base::binary) ;
   if (liFilOrg->is_open()){
 	  if (llBufSze > 0){
 		  lpFilOrg = new JFileIStreamAhead(liFilOrg, "Org",  llBufSze, liBlkSze);
@@ -417,8 +499,8 @@ int main(int aiArgCnt, char *acArg[])
       lpFilNew = new JFileAhead(lfFilNew, "New", llBufSze, liBlkSze);
   }
 #else
-  liFilNew = new ifstream();
-  liFilNew->open(lcFilNamNew, ios_base::in | ios_base::binary) ;
+  //liFilNew = new ifstream();
+  //liFilNew->open(lcFilNamNew, ios_base::in | ios_base::binary) ;
   if (liFilNew->is_open()){
 	  if (llBufSze > 0){
 		  lpFilNew = new JFileIStreamAhead(liFilNew, "New",  llBufSze, liBlkSze);

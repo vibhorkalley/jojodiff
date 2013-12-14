@@ -66,6 +66,7 @@
 #include "JDefs.h"
 #include "JDiff.h"
 #include <limits.h>
+#include <omp.h>
 
 #ifdef _FILE_OFFSET_BITS
 #warning FILE OFFSET BITS set
@@ -537,6 +538,8 @@ int JDiff::ufFndAhdScn ()
 
   /* Build hashtable */
   liIdx = 0;
+//#pragma omp parallel default(shared) private(lcValOrg, lkHshOrg, lzPosOrg, liEqlOrg, liIdx)
+{
   while (lcValOrg > EOF) {
     gpHsh->hash(lcValOrg, lkHshOrg) ;
     gpHsh->add(lkHshOrg, lzPosOrg, liEqlOrg) ;
@@ -560,7 +563,11 @@ int JDiff::ufFndAhdScn ()
             }
         }
     }
+//#pragma omp flush(lcValOrg)
   }
+}
+
+//#pragma omp barrier
 
   if (miVerbse > 0) fprintf(JDebug::stddbg, ".\n");
 

@@ -10,22 +10,25 @@ SHELL := /bin/bash
 DIFF_EXE=jdiff
 PTCH_EXE=jptch
 
-all:	$(DIFF_EXE) $(PTCH_EXE)
-debug:	all
-full:	clean all
+all:	  $(DIFF_EXE) $(PTCH_EXE)
+debug:	  all
+full:	  clean all
+parallel: debug
 
 CPP=g++
-WARNINGS=-Wno-cpp -Wno-format -Wall
+WARNINGS=-Wno-cpp# -Wno-format -Wall
 INCLUDE=-Iheaders
 
-CFLAGS=-O3 -c -funroll-loops
+CFLAGS=-c# -O3 -funroll-loops
 CFLAGS+=$(WARNINGS)
 CFLAGS+=-D_FILE_OFFSET_BITS=64 -U_LARGEFILE64_SOURCE
 
-LDFLAGS=-O2
+LDFLAGS=#-O2
 LDFLAGS+=$(WARNINGS)
 
 debug:DEBUG=-g -D_DEBUG
+parallel:CFLAGS+=-fopenmp -lpthread
+parallel:LDFLAGS+=-fopenmp -lpthread
 
 $(DIFF_EXE): $(OBJECTS)
 	$(CPP) $(INCLUDE) $(LDFLAGS) $(DEBUG) $(OBJECTS) $(JDIFF_MAIN) -o $@
