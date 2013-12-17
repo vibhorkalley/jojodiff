@@ -46,14 +46,16 @@ int JFileIStream:: get (
     const off_t &azPos,    	/* position to read from                */
     const int aiTyp     /* 0=read, 1=hard ahead, 2=soft ahead   */
 ) {
-    //if (azPos != mzPosInp){
-    //    mlFabSek++;
-    //    if (mpStream->eof())
-    //        mpStream->clear();
-    //    mpStream->seekg(azPos, std::ios::beg); // may throw an exception
-    // }
-    //mzPosInp = azPos + 1;
-    return 1;
+    if (azPos != mzPosInp){
+        mlFabSek++;
+        mzPosInp = azPos;
+    }
+
+    int ret = mpStream[mzPosInp];
+
+    mzPosInp = azPos + 1;
+
+    return ret;
 } /* function get */
 } /* namespace JojoDiff */
 
