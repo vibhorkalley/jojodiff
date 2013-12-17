@@ -21,12 +21,13 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <sstream>
 
 #include "JFileIStream.h"
 #include "JDebug.h"
 
 namespace JojoDiff {
-JFileIStream::JFileIStream(char *apFil, const char *asFid, size_t size) :
+JFileIStream::JFileIStream(istringstream *apFil, const char *asFid, size_t size) :
     mpStream(apFil), msFid(asFid), mzPosInp(0), mlFabSek(0), buffSize(size)
 {
 }
@@ -48,16 +49,12 @@ int JFileIStream:: get (
 ) {
     if (azPos != mzPosInp){
         mlFabSek++;
-        mzPosInp = azPos;
+        if (mpStream->eof())
+            mpStream->clear();
+        mpStream->seekg(azPos, std::ios::beg); // may throw an exception
     }
-
-    int ret = mpStream[mzPosInp];
-
     mzPosInp = azPos + 1;
-
-    if(mzPosInp > buffSize)
-      return EOF;
-    return ret;
+    return mpStream->get();
 } /* function get */
 } /* namespace JojoDiff */
 

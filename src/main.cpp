@@ -131,6 +131,7 @@ using namespace std ;
 #ifdef __MINGW32__
 #include "JFileAhead.h"
 #else
+#include <sstream>
 #include <iostream>
 #include <istream>
 #include <fstream>
@@ -153,7 +154,7 @@ using namespace JojoDiff ;
 
 typedef struct param_t {
 	istream *fileHandler;
-	char *dest;
+	istringstream *dest;
   size_t size;
 } param;
 
@@ -161,7 +162,11 @@ void *fillBuffer(void *in)
 {
   param *p = (param *)in;
 
-  p->fileHandler->read(p->dest, p->size);
+  char *buff = new char[p->size];
+
+  p->fileHandler->read(buff, p->size);
+
+  p->dest = new istringstream(buff);
 
   return NULL;
 }
@@ -433,9 +438,6 @@ int main(int aiArgCnt, char *acArg[])
   paramNew.size = fileNewSize;
   paramOrg.size = fileOrgSize;
 
-  paramNew.dest = new char[fileNewSize];
-  paramOrg.dest = new char[fileOrgSize];
-
   rc = pthread_create(&threadNew, NULL, fillBuffer, (void *)(&paramNew));
 	if(rc) {
 		fprintf(stderr, "error creating threads\n");
@@ -567,6 +569,8 @@ int main(int aiArgCnt, char *acArg[])
   /* Cleanup */
   delete lpFilOrg;
   delete lpFilNew;
+  delete paramOrg.dest;
+  delete paramNew.dest;
 #ifndef __MINGW32__
   if (liFilOrg != NULL) {
 	  liFilOrg->close();
