@@ -161,7 +161,7 @@ void *fillBuffer(void *in)
 {
   param *p = (param *)in;
 
-  p->fileHandler->read(p->dest, p->size - 1);
+  p->fileHandler->read(p->dest, p->size);
 
   return NULL;
 }
@@ -427,8 +427,8 @@ int main(int aiArgCnt, char *acArg[])
   stat(lcFilNamOrg, &fileOrgStatus );
   stat(lcFilNamNew, &fileNewStatus );
 
-  int fileOrgSize = fileOrgStatus.st_size;
-  int fileNewSize = fileNewStatus.st_size;
+  size_t fileOrgSize = fileOrgStatus.st_size;
+  size_t fileNewSize = fileNewStatus.st_size;
 
   paramNew.size = fileNewSize;
   paramOrg.size = fileOrgSize;
@@ -473,7 +473,7 @@ int main(int aiArgCnt, char *acArg[])
 	  if (llBufSze > 0){
 		  lpFilOrg = new JFileIStreamAhead(liFilOrg, "Org",  llBufSze, liBlkSze);
 	  } else {
-		  lpFilOrg = new JFileIStream(paramOrg.dest, "Org");
+		  lpFilOrg = new JFileIStream(paramOrg.dest, "Org", fileOrgSize);
 	  }
   }
 #endif
@@ -495,7 +495,7 @@ int main(int aiArgCnt, char *acArg[])
 	  if (llBufSze > 0){
 		  lpFilNew = new JFileIStreamAhead(liFilNew, "New",  llBufSze, liBlkSze);
 	  } else {
-		  lpFilNew = new JFileIStream(paramNew.dest, "New");
+		  lpFilNew = new JFileIStream(paramNew.dest, "New", fileNewSize);
 	  }
   }
 #endif

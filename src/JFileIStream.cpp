@@ -26,8 +26,8 @@
 #include "JDebug.h"
 
 namespace JojoDiff {
-JFileIStream::JFileIStream(char *apFil, const char *asFid) :
-    mpStream(apFil), msFid(asFid), mzPosInp(0), mlFabSek(0)
+JFileIStream::JFileIStream(char *apFil, const char *asFid, size_t size) :
+    mpStream(apFil), msFid(asFid), mzPosInp(0), mlFabSek(0), buffSize(size)
 {
 }
 
@@ -55,6 +55,8 @@ int JFileIStream:: get (
 
     mzPosInp = azPos + 1;
 
+    if(mzPosInp > buffSize)
+      return EOF;
     return ret;
 } /* function get */
 } /* namespace JojoDiff */
