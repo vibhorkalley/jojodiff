@@ -22,8 +22,7 @@
 #ifndef JFILEISTREAM_H_
 #define JFILEISTREAM_H_
 
-#include <sstream>
-
+#include <istream>
 using namespace std ;
 
 #include "JDefs.h"
@@ -39,7 +38,7 @@ public:
     /**
      * Construct an unbuffered JFile on an istream.
      */
-	JFileIStream(istringstream *apFil, const char *asFid, size_t size);
+	JFileIStream(istream * apFil, const char *asFid);
 
 	/**
 	 * Destroy the JFile.
@@ -61,9 +60,8 @@ public:
 
 private:
 	/* Context */
-    istringstream *mpStream;      /* file handle                                  */
+    istream *mpStream;      /* file handle                                  */
     const char *msFid;      /* file id (for debugging)                      */
-    size_t buffSize;
 
     /* State */
     off_t mzPosInp;         /* current position in file                     */

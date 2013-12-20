@@ -21,14 +21,13 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <sstream>
 
 #include "JFileIStream.h"
 #include "JDebug.h"
 
 namespace JojoDiff {
-JFileIStream::JFileIStream(istringstream *apFil, const char *asFid, size_t size) :
-    mpStream(apFil), msFid(asFid), mzPosInp(0), mlFabSek(0), buffSize(size)
+JFileIStream::JFileIStream(istream * apFil, const char *asFid) :
+    mpStream(apFil), msFid(asFid), mzPosInp(0), mlFabSek(0)
 {
 }
 

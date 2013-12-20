@@ -27,8 +27,8 @@ LDFLAGS=#-O2
 LDFLAGS+=$(WARNINGS)
 
 debug:DEBUG=-g -D_DEBUG
-parallel:CFLAGS+=-fopenmp -lpthread
-parallel:LDFLAGS+=-fopenmp -lpthread
+parallel:CFLAGS+=-fopenmp
+parallel:LDFLAGS+=-fopenmp
 
 $(DIFF_EXE): $(OBJECTS)
 	$(CPP) $(INCLUDE) $(LDFLAGS) $(DEBUG) $(OBJECTS) $(JDIFF_MAIN) -o $@

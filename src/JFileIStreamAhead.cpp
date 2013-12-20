@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <exception>
+#include <omp.h>
 
 #include "JFileIStreamAhead.h"
 #include "JDebug.h"
@@ -57,10 +58,11 @@ JFileIStreamAhead::JFileIStreamAhead(istream * apFil, const char *asFid, const l
         fprintf(JDebug::stddbg, "ufFabOpn(%s):(buf=%p,max=%p,sze=%ld)\n",
                 asFid, mpBuf, mpMax, mlBufSze);
 #endif
-    }
+}
 
-JFileIStreamAhead::~JFileIStreamAhead() {
-	if (mpBuf != null) free(mpBuf) ;
+JFileIStreamAhead::~JFileIStreamAhead()
+{
+	if (mpBuf != null) free(mpBuf);
 }
 
 /**
@@ -276,7 +278,9 @@ int JFileIStreamAhead::get_outofbuffer (
     } /* if liSek */
 
     /* Read a chunk of data (in 16 kbyte blocks) */
+    #pragma omp critical (read)
     mpStream->read((char *)lpInp, liTdo) ;
+
     liDne = mpStream->gcount();
     if (liDne < liTdo) {
       #if debug
