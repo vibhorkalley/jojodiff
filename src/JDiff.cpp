@@ -538,7 +538,7 @@ int JDiff::ufFndAhdScn ()
 
   /* Build hashtable */
   liIdx = 0;
-//#pragma omp parallel default(shared) private(lcValOrg, lkHshOrg, lzPosOrg, liEqlOrg, liIdx)
+#pragma omp parallel default(shared) private(lcValOrg, lkHshOrg, lzPosOrg, liEqlOrg, liIdx)
 {
   while (lcValOrg > EOF) {
     gpHsh->hash(lcValOrg, lkHshOrg) ;
@@ -563,11 +563,11 @@ int JDiff::ufFndAhdScn ()
             }
         }
     }
-//#pragma omp flush(lcValOrg)
+#pragma omp flush(lcValOrg)
   }
 }
 
-//#pragma omp barrier
+#pragma omp barrier
 
   if (miVerbse > 0) fprintf(JDebug::stddbg, ".\n");
 
