@@ -39,16 +39,23 @@ $(PTCH_EXE): $(JPATCH_MAIN)
 bin/%.o: src/%.cpp
 	$(CPP) $(INCLUDE) $(CFLAGS) $(DEBUG) -o bin/$*.o src/$*.cpp
 
-# for generate test file: make gentest SIZE=100
+
 gentest:
-	dd if=/dev/urandom of=tests/$(SIZE)MB bs=1MB count=$(SIZE)
+	@echo "End the process when you wish, depending on the desired file size"
+	cat /dev/urandom | tr -dc a-zA-Z0-9 > $(FILE_NAME)
 
-# for running a test: make runtest TEST=path/to/testfile
+# OUT_FILE = desired output file name (patch name)
 runtest:
-	time ./$(DIFF_EXE) $(TEST) $(TEST) &> /dev/null
-
+	time ./$(DIFF_EXE) -m 0 $(TEST1) $(TEST2) > $(OUT_FILE)
+	@echo
+	@echo "Patching..."
+	./$(PTCH_EXE) $(TEST1) $(OUT_FILE) > patched_version
+	@echo
+	@echo "Verifying desired and resulted file:"
+	md5sum $(TEST2) patched_version
+	@echo
 clean:
-	rm -f $(DIFF_EXE) $(PTCH_EXE) $(OBJECTS)
+	rm -f $(DIFF_EXE) $(PTCH_EXE) $(OBJECTS) $(OUT_FILE) patched_version
 
 .DEFAULT:	all
 .PHONY:		clean
